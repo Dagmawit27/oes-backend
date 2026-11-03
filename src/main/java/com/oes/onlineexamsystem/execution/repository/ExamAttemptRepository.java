@@ -25,6 +25,10 @@ public interface ExamAttemptRepository extends JpaRepository<ExamAttempt, Long> 
 
     List<ExamAttempt> findByStudentIdOrderByStartedAtDesc(Long studentId);
 
+    List<ExamAttempt> findByStudentId(Long studentId);
+
+    List<ExamAttempt> findByExaminationId(Long examinationId);
+
     @Query("SELECT a FROM ExamAttempt a LEFT JOIN FETCH a.answers ans LEFT JOIN FETCH ans.selectedOptions WHERE a.id = :id")
     Optional<ExamAttempt> findByIdWithAnswers(@Param("id") Long id);
 }

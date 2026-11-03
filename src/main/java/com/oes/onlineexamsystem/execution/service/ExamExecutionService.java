@@ -18,6 +18,7 @@ import com.oes.onlineexamsystem.question.entity.Question;
 import com.oes.onlineexamsystem.question.entity.QuestionOption;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import com.oes.onlineexamsystem.question.repository.QuestionOptionRepository;
+import com.oes.onlineexamsystem.result.service.GradingAndResultService;
 import com.oes.onlineexamsystem.schedule.entity.EligibilityStatus;
 import com.oes.onlineexamsystem.schedule.entity.ExamEligibility;
 import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
@@ -25,6 +26,7 @@ import com.oes.onlineexamsystem.schedule.entity.ScheduleStatus;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
 import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
 import com.oes.onlineexamsystem.schedule.service.ExamScheduleService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.*;
 
+@Slf4j
 @Service
 public class ExamExecutionService {
 
@@ -44,6 +47,7 @@ public class ExamExecutionService {
     private final StudentRepository studentRepository;
     private final ExamQuestionRepository examQuestionRepository;
     private final QuestionOptionRepository questionOptionRepository;
+    private final GradingAndResultService gradingAndResultService;
 
     public ExamExecutionService(ExamAttemptRepository attemptRepository,
                                 StudentAnswerRepository answerRepository,
@@ -53,7 +57,8 @@ public class ExamExecutionService {
                                 ExamEligibilityRepository eligibilityRepository,
                                 StudentRepository studentRepository,
                                 ExamQuestionRepository examQuestionRepository,
-                                QuestionOptionRepository questionOptionRepository) {
+                                QuestionOptionRepository questionOptionRepository,
+                                GradingAndResultService gradingAndResultService) {
         this.attemptRepository = attemptRepository;
         this.answerRepository = answerRepository;
         this.answerOptionRepository = answerOptionRepository;
@@ -63,6 +68,7 @@ public class ExamExecutionService {
         this.studentRepository = studentRepository;
         this.examQuestionRepository = examQuestionRepository;
         this.questionOptionRepository = questionOptionRepository;
+        this.gradingAndResultService = gradingAndResultService;
     }
 
     /**
@@ -300,6 +306,13 @@ public class ExamExecutionService {
         ExamAttempt saved = attemptRepository.save(attempt);
         logEvent(saved, ExamEventType.SUBMITTED, "Exam submitted by candidate", ipAddress, userAgent);
 
+        // Auto-grade objective questions upon submission
+        try {
+            gradingAndResultService.autoGradeAttempt(saved);
+        } catch (Exception e) {
+            log.error("Failed to auto-grade attempt: {}", saved.getId(), e);
+        }
+
         return buildSubmissionResult(saved, "Examination submitted successfully! Your responses have been finalized and recorded.");
     }
 
@@ -330,8 +343,13 @@ public class ExamExecutionService {
         for (ExamAttempt attempt : expiredAttempts) {
             attempt.setStatus(AttemptStatus.EXPIRED);
             attempt.setSubmittedAt(attempt.getDeadlineAt()); // Capped at official deadline
-            attemptRepository.save(attempt);
-            logEvent(attempt, ExamEventType.AUTO_SUBMITTED_EXPIRED, "System auto-finalized attempt upon deadline expiration", "SYSTEM", "BACKGROUND_SCHEDULER");
+            ExamAttempt saved = attemptRepository.save(attempt);
+            logEvent(saved, ExamEventType.AUTO_SUBMITTED_EXPIRED, "System auto-finalized attempt upon deadline expiration", "SYSTEM", "BACKGROUND_SCHEDULER");
+            try {
+                gradingAndResultService.autoGradeAttempt(saved);
+            } catch (Exception e) {
+                log.error("Failed to auto-grade expired attempt: {}", saved.getId(), e);
+            }
         }
     }
 
