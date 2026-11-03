@@ -14,6 +14,8 @@ import com.oes.onlineexamsystem.execution.repository.ExamAttemptRepository;
 import com.oes.onlineexamsystem.execution.repository.ExamEventRepository;
 import com.oes.onlineexamsystem.execution.repository.StudentAnswerOptionRepository;
 import com.oes.onlineexamsystem.execution.repository.StudentAnswerRepository;
+import com.oes.onlineexamsystem.monitoring.service.ExamMonitoringService;
+import com.oes.onlineexamsystem.notification.service.NotificationService;
 import com.oes.onlineexamsystem.question.entity.Question;
 import com.oes.onlineexamsystem.question.entity.QuestionOption;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
@@ -21,7 +23,9 @@ import com.oes.onlineexamsystem.question.repository.QuestionOptionRepository;
 import com.oes.onlineexamsystem.result.service.GradingAndResultService;
 import com.oes.onlineexamsystem.schedule.entity.EligibilityStatus;
 import com.oes.onlineexamsystem.schedule.entity.ExamEligibility;
+import com.oes.onlineexamsystem.schedule.entity.ExamNotification;
 import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
+import com.oes.onlineexamsystem.schedule.entity.NotificationType;
 import com.oes.onlineexamsystem.schedule.entity.ScheduleStatus;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
 import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
@@ -48,6 +52,8 @@ public class ExamExecutionService {
     private final ExamQuestionRepository examQuestionRepository;
     private final QuestionOptionRepository questionOptionRepository;
     private final GradingAndResultService gradingAndResultService;
+    private final NotificationService notificationService;
+    private final ExamMonitoringService monitoringService;
 
     public ExamExecutionService(ExamAttemptRepository attemptRepository,
                                 StudentAnswerRepository answerRepository,
@@ -58,7 +64,9 @@ public class ExamExecutionService {
                                 StudentRepository studentRepository,
                                 ExamQuestionRepository examQuestionRepository,
                                 QuestionOptionRepository questionOptionRepository,
-                                GradingAndResultService gradingAndResultService) {
+                                GradingAndResultService gradingAndResultService,
+                                NotificationService notificationService,
+                                ExamMonitoringService monitoringService) {
         this.attemptRepository = attemptRepository;
         this.answerRepository = answerRepository;
         this.answerOptionRepository = answerOptionRepository;
@@ -69,6 +77,8 @@ public class ExamExecutionService {
         this.examQuestionRepository = examQuestionRepository;
         this.questionOptionRepository = questionOptionRepository;
         this.gradingAndResultService = gradingAndResultService;
+        this.notificationService = notificationService;
+        this.monitoringService = monitoringService;
     }
 
     /**
@@ -170,6 +180,18 @@ public class ExamExecutionService {
 
         ExamAttempt savedAttempt = attemptRepository.save(newAttempt);
         logEvent(savedAttempt, ExamEventType.STARTED, "Exam attempt initiated by student", ipAddress, userAgent);
+
+        try {
+            notificationService.sendNotificationToUser(
+                    student.getUser(),
+                    NotificationType.EXAM_STARTING,
+                    "Examination Started: " + exam.getTitle(),
+                    "Your examination attempt has officially started. Deadline: " + officialDeadline,
+                    schedule
+            );
+        } catch (Exception e) {
+            log.warn("Failed to send start exam notification: {}", e.getMessage());
+        }
 
         return buildExecutionPayload(savedAttempt, exam, schedule, now);
     }
@@ -306,6 +328,18 @@ public class ExamExecutionService {
         ExamAttempt saved = attemptRepository.save(attempt);
         logEvent(saved, ExamEventType.SUBMITTED, "Exam submitted by candidate", ipAddress, userAgent);
 
+        try {
+            notificationService.sendNotificationToUser(
+                    attempt.getStudent().getUser(),
+                    NotificationType.EXAM_SUBMITTED,
+                    "Examination Submitted: " + attempt.getExamination().getTitle(),
+                    "Your examination attempt was received and recorded successfully.",
+                    attempt.getSchedule()
+            );
+        } catch (Exception e) {
+            log.warn("Failed to send submit exam notification: {}", e.getMessage());
+        }
+
         // Auto-grade objective questions upon submission
         try {
             gradingAndResultService.autoGradeAttempt(saved);
@@ -346,6 +380,17 @@ public class ExamExecutionService {
             ExamAttempt saved = attemptRepository.save(attempt);
             logEvent(saved, ExamEventType.AUTO_SUBMITTED_EXPIRED, "System auto-finalized attempt upon deadline expiration", "SYSTEM", "BACKGROUND_SCHEDULER");
             try {
+                notificationService.sendNotificationToUser(
+                        attempt.getStudent().getUser(),
+                        NotificationType.EXAM_COMPLETED,
+                        "Examination Sitting Closed: " + attempt.getExamination().getTitle(),
+                        "The examination deadline has arrived and your attempt was officially closed.",
+                        attempt.getSchedule()
+                );
+            } catch (Exception e) {
+                log.warn("Failed to send expired exam notification: {}", e.getMessage());
+            }
+            try {
                 gradingAndResultService.autoGradeAttempt(saved);
             } catch (Exception e) {
                 log.error("Failed to auto-grade expired attempt: {}", saved.getId(), e);
@@ -363,6 +408,14 @@ public class ExamExecutionService {
                 .occurredAt(Instant.now())
                 .build();
         eventRepository.save(event);
+
+        if (attempt.getSchedule() != null) {
+            try {
+                monitoringService.broadcastMonitoringEvent(attempt.getSchedule().getId(), type, attempt, payload);
+            } catch (Exception e) {
+                log.warn("Failed to broadcast monitoring event to WebSocket: {}", e.getMessage());
+            }
+        }
     }
 
     /**

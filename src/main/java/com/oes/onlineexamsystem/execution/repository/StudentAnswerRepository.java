@@ -18,4 +18,6 @@ public interface StudentAnswerRepository extends JpaRepository<StudentAnswer, Lo
     List<StudentAnswer> findByAttemptIdWithSelectedOptions(@Param("attemptId") Long attemptId);
 
     List<StudentAnswer> findByAttemptId(Long attemptId);
+
+    int countByAttemptId(Long attemptId);
 }

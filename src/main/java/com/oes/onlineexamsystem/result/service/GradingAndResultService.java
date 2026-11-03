@@ -23,6 +23,7 @@ import com.oes.onlineexamsystem.execution.entity.StudentAnswer;
 import com.oes.onlineexamsystem.execution.entity.StudentAnswerOption;
 import com.oes.onlineexamsystem.execution.repository.ExamAttemptRepository;
 import com.oes.onlineexamsystem.execution.repository.StudentAnswerRepository;
+import com.oes.onlineexamsystem.notification.service.NotificationService;
 import com.oes.onlineexamsystem.question.entity.Question;
 import com.oes.onlineexamsystem.question.entity.QuestionOption;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
@@ -32,6 +33,7 @@ import com.oes.onlineexamsystem.result.repository.ExamResultRepository;
 import com.oes.onlineexamsystem.result.repository.GradeDetailRepository;
 import com.oes.onlineexamsystem.result.repository.ResultCorrectionAuditRepository;
 import com.oes.onlineexamsystem.schedule.entity.ExamEligibility;
+import com.oes.onlineexamsystem.schedule.entity.NotificationType;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
 import com.oes.onlineexamsystem.user.entity.User;
 import com.oes.onlineexamsystem.user.repository.UserRepository;
@@ -63,6 +65,7 @@ public class GradingAndResultService {
     private final CourseOfferingRepository courseOfferingRepository;
     private final ExamEligibilityRepository eligibilityRepository;
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -407,7 +410,21 @@ public class GradingAndResultService {
         result.setPublishedBy(officer);
         result.setPublishedAt(Instant.now());
 
-        return resultRepository.save(result);
+        ExamResult saved = resultRepository.save(result);
+        try {
+            notificationService.sendNotificationToUser(
+                    saved.getStudent().getUser(),
+                    NotificationType.RESULTS_PUBLISHED,
+                    "Examination Results Published: " + saved.getExamination().getTitle(),
+                    "Your results have been officially published. Earned Marks: " +
+                            (saved.getEarnedMarks() != null ? String.format("%.2f / %.2f", saved.getEarnedMarks(), saved.getTotalMarks()) : "Pending"),
+                    saved.getAttempt() != null ? saved.getAttempt().getSchedule() : null
+            );
+        } catch (Exception e) {
+            log.warn("Failed to send result publication notification: {}", e.getMessage());
+        }
+
+        return saved;
     }
 
     /**
@@ -429,8 +446,20 @@ public class GradingAndResultService {
                 r.setPublicationStatus(PublicationStatus.PUBLISHED);
                 r.setPublishedBy(officer);
                 r.setPublishedAt(Instant.now());
-                resultRepository.save(r);
+                ExamResult saved = resultRepository.save(r);
                 count++;
+                try {
+                    notificationService.sendNotificationToUser(
+                            saved.getStudent().getUser(),
+                            NotificationType.RESULTS_PUBLISHED,
+                            "Examination Results Published: " + exam.getTitle(),
+                            "Your results have been officially published. Earned Marks: " +
+                                    (saved.getEarnedMarks() != null ? String.format("%.2f / %.2f", saved.getEarnedMarks(), saved.getTotalMarks()) : "Pending"),
+                            saved.getAttempt() != null ? saved.getAttempt().getSchedule() : null
+                    );
+                } catch (Exception e) {
+                    log.warn("Failed to send result publication notification: {}", e.getMessage());
+                }
             }
         }
 

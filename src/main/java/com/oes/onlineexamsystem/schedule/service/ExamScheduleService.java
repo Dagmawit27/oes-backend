@@ -10,6 +10,7 @@ import com.oes.onlineexamsystem.common.exception.ResourceNotFoundException;
 import com.oes.onlineexamsystem.examination.entity.ExamStatus;
 import com.oes.onlineexamsystem.examination.entity.Examination;
 import com.oes.onlineexamsystem.examination.repository.ExaminationRepository;
+import com.oes.onlineexamsystem.notification.service.NotificationService;
 import com.oes.onlineexamsystem.schedule.dto.*;
 import com.oes.onlineexamsystem.schedule.entity.*;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
@@ -22,6 +23,7 @@ import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +31,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
+@Slf4j
 @Service
 public class ExamScheduleService {
 
@@ -40,6 +43,7 @@ public class ExamScheduleService {
     private final EnrollmentRepository enrollmentRepository;
     private final StudentRepository studentRepository;
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
     private static final List<ScheduleStatus> ACTIVE_STATUSES = List.of(
             ScheduleStatus.SCHEDULED, ScheduleStatus.ONGOING, ScheduleStatus.RESCHEDULED
@@ -52,7 +56,8 @@ public class ExamScheduleService {
                                ExaminationRepository examinationRepository,
                                EnrollmentRepository enrollmentRepository,
                                StudentRepository studentRepository,
-                               UserRepository userRepository) {
+                               UserRepository userRepository,
+                               NotificationService notificationService) {
         this.scheduleRepository = scheduleRepository;
         this.eligibilityRepository = eligibilityRepository;
         this.roomRepository = roomRepository;
@@ -61,6 +66,7 @@ public class ExamScheduleService {
         this.enrollmentRepository = enrollmentRepository;
         this.studentRepository = studentRepository;
         this.userRepository = userRepository;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -442,18 +448,20 @@ public class ExamScheduleService {
                 schedule.getEligibilities().add(eligibility);
                 eligibilityRepository.save(eligibility);
 
-                // Create notification event
+                // Create notification event and dispatch real-time STOMP message
                 if (student.getUser() != null) {
-                    ExamNotification notification = ExamNotification.builder()
-                            .schedule(schedule)
-                            .user(student.getUser())
-                            .eventType(NotificationType.EXAM_SCHEDULED)
-                            .title("Examination Scheduled: " + examination.getTitle())
-                            .message("Your examination for " + examination.getCourseOffering().getCourse().getCode() +
-                                    " has been scheduled for " + schedule.getScheduledStartAt() + ". Please check your exam schedule.")
-                            .isRead(false)
-                            .build();
-                    notificationRepository.save(notification);
+                    try {
+                        notificationService.sendNotificationToUser(
+                                student.getUser(),
+                                NotificationType.EXAM_SCHEDULED,
+                                "Examination Scheduled: " + examination.getTitle(),
+                                "Your examination for " + examination.getCourseOffering().getCourse().getCode() +
+                                        " has been scheduled for " + schedule.getScheduledStartAt() + ". Please check your exam schedule.",
+                                schedule
+                        );
+                    } catch (Exception e) {
+                        log.warn("Failed to deliver real-time schedule notification: {}", e.getMessage());
+                    }
                 }
             }
         }
@@ -462,15 +470,17 @@ public class ExamScheduleService {
     private void emitScheduleNotifications(ExamSchedule schedule, NotificationType type, String title, String message) {
         for (ExamEligibility ee : schedule.getEligibilities()) {
             if (ee.getStudent() != null && ee.getStudent().getUser() != null) {
-                ExamNotification notification = ExamNotification.builder()
-                        .schedule(schedule)
-                        .user(ee.getStudent().getUser())
-                        .eventType(type)
-                        .title(title)
-                        .message(message)
-                        .isRead(false)
-                        .build();
-                notificationRepository.save(notification);
+                try {
+                    notificationService.sendNotificationToUser(
+                            ee.getStudent().getUser(),
+                            type,
+                            title,
+                            message,
+                            schedule
+                    );
+                } catch (Exception e) {
+                    log.warn("Failed to deliver real-time schedule notification: {}", e.getMessage());
+                }
             }
         }
     }

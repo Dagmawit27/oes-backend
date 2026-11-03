@@ -10,4 +10,8 @@ import java.util.List;
 public interface ExamEventRepository extends JpaRepository<ExamEvent, Long> {
 
     List<ExamEvent> findByAttemptIdOrderByOccurredAtAsc(Long attemptId);
+
+    List<ExamEvent> findTop50ByAttempt_ScheduleIdOrderByOccurredAtDesc(Long scheduleId);
+
+    List<ExamEvent> findByAttempt_ScheduleIdOrderByOccurredAtDesc(Long scheduleId);
 }

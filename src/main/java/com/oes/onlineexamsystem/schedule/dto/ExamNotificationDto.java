@@ -15,6 +15,7 @@ public class ExamNotificationDto {
 
     private Long id;
     private Long scheduleId;
+    private String examinationTitle;
     private Long userId;
     private NotificationType eventType;
     private String title;
@@ -24,9 +25,14 @@ public class ExamNotificationDto {
 
     public static ExamNotificationDto fromEntity(ExamNotification n) {
         if (n == null) return null;
+        String examTitle = null;
+        if (n.getSchedule() != null && n.getSchedule().getExamination() != null) {
+            examTitle = n.getSchedule().getExamination().getTitle();
+        }
         return ExamNotificationDto.builder()
                 .id(n.getId())
                 .scheduleId(n.getSchedule() != null ? n.getSchedule().getId() : null)
+                .examinationTitle(examTitle)
                 .userId(n.getUser() != null ? n.getUser().getId() : null)
                 .eventType(n.getEventType())
                 .title(n.getTitle())
