@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oes.onlineexamsystem.auth.dto.LoginRequest;
 import com.oes.onlineexamsystem.schedule.dto.CreateScheduleRequest;
 import com.oes.onlineexamsystem.schedule.dto.RescheduleRequest;
+import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
+import com.oes.onlineexamsystem.schedule.entity.ScheduleStatus;
+import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
 import com.oes.onlineexamsystem.schedule.service.ExamScheduleService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,6 +31,9 @@ class ScheduleIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ExamScheduleRepository scheduleRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -76,7 +82,7 @@ class ScheduleIntegrationTest {
     void testCreateSchedule_Success() throws Exception {
         String officerToken = getAuthToken("officer@college.edu");
 
-        Instant start = Instant.now().plus(5, ChronoUnit.DAYS);
+        Instant start = Instant.now().plus(45, ChronoUnit.DAYS);
         Instant close = start.plus(3, ChronoUnit.HOURS);
 
         CreateScheduleRequest request = CreateScheduleRequest.builder()
@@ -84,7 +90,7 @@ class ScheduleIntegrationTest {
                 .scheduledStartAt(start)
                 .scheduledCloseAt(close)
                 .durationMinutes(60)
-                .roomId(2L) // Lecture Hall 101
+                .roomId(3L) // Auditorium Main
                 .instructions("Arrive 10 minutes early with student ID.")
                 .autoGenerateEligibility(true)
                 .build();
@@ -151,16 +157,20 @@ class ScheduleIntegrationTest {
     void testRoomConflict_PreventsDoubleBooking() throws Exception {
         String officerToken = getAuthToken("officer@college.edu");
 
-        // The seeded schedule uses Room 1 (Lab 201) from now+3 days for 4 hours
-        Instant conflictStart = Instant.now().plus(3, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS);
-        Instant conflictClose = conflictStart.plus(2, ChronoUnit.HOURS);
+        ExamSchedule existing = scheduleRepository.findAll().stream()
+                .filter(s -> s.getRoom() != null && s.getStatus() == ScheduleStatus.SCHEDULED)
+                .findFirst()
+                .orElseThrow();
+
+        Instant conflictStart = existing.getScheduledStartAt().plus(10, ChronoUnit.MINUTES);
+        Instant conflictClose = conflictStart.plus(30, ChronoUnit.MINUTES);
 
         CreateScheduleRequest conflictingRequest = CreateScheduleRequest.builder()
                 .examinationId(1L)
                 .scheduledStartAt(conflictStart)
                 .scheduledCloseAt(conflictClose)
-                .durationMinutes(60)
-                .roomId(1L) // Same Room 1!
+                .durationMinutes(30)
+                .roomId(existing.getRoom().getId())
                 .build();
 
         mockMvc.perform(post("/api/v1/schedules")
