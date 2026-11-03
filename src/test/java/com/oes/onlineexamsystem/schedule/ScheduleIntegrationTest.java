@@ -2,12 +2,14 @@ package com.oes.onlineexamsystem.schedule;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oes.onlineexamsystem.auth.dto.LoginRequest;
+import com.oes.onlineexamsystem.execution.repository.ExamAttemptRepository;
 import com.oes.onlineexamsystem.schedule.dto.CreateScheduleRequest;
 import com.oes.onlineexamsystem.schedule.dto.RescheduleRequest;
 import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
 import com.oes.onlineexamsystem.schedule.entity.ScheduleStatus;
 import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
 import com.oes.onlineexamsystem.schedule.service.ExamScheduleService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,17 @@ class ScheduleIntegrationTest {
 
     @Autowired
     private ExamScheduleRepository scheduleRepository;
+
+    @Autowired
+    private ExamAttemptRepository attemptRepository;
+
+    @BeforeEach
+    void cleanUpTestSchedules() {
+        attemptRepository.deleteAll();
+        scheduleRepository.findAll().stream()
+                .filter(s -> s.getId() > 2L)
+                .forEach(scheduleRepository::delete);
+    }
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
