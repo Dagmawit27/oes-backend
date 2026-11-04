@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oes.onlineexamsystem.auth.dto.LoginRequest;
 import com.oes.onlineexamsystem.question.dto.CreateQuestionRequest;
 import com.oes.onlineexamsystem.question.dto.QuestionOptionDto;
-import com.oes.onlineexamsystem.question.entity.DifficultyLevel;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,7 +68,6 @@ class QuestionIntegrationTest {
                 .courseId(1L)
                 .questionText("Which protocol operates at the Transport Layer of the OSI model?")
                 .questionType(QuestionType.SINGLE_CHOICE)
-                .difficultyLevel(DifficultyLevel.EASY)
                 .defaultMarks(BigDecimal.valueOf(2.00))
                 .explanation("TCP and UDP operate at Layer 4 (Transport Layer).")
                 .options(List.of(
@@ -100,7 +98,6 @@ class QuestionIntegrationTest {
                 .courseId(1L)
                 .questionText("Invalid Single Choice Question")
                 .questionType(QuestionType.SINGLE_CHOICE)
-                .difficultyLevel(DifficultyLevel.EASY)
                 .defaultMarks(BigDecimal.valueOf(1.00))
                 .options(List.of(
                         QuestionOptionDto.builder().optionText("Option 1").optionOrder(1).isCorrect(true).build(),
@@ -126,7 +123,6 @@ class QuestionIntegrationTest {
                 .courseId(1L)
                 .questionText("Which of the following are non-linear data structures? (Select all that apply)")
                 .questionType(QuestionType.MULTIPLE_CHOICE)
-                .difficultyLevel(DifficultyLevel.MEDIUM)
                 .defaultMarks(BigDecimal.valueOf(3.00))
                 .options(List.of(
                         QuestionOptionDto.builder().optionText("Tree").optionOrder(1).isCorrect(true).build(),
@@ -154,7 +150,6 @@ class QuestionIntegrationTest {
                 .courseId(1L)
                 .questionText("In Java, arrays have a fixed size after instantiation.")
                 .questionType(QuestionType.TRUE_FALSE)
-                .difficultyLevel(DifficultyLevel.EASY)
                 .defaultMarks(BigDecimal.valueOf(1.00))
                 .options(List.of(
                         QuestionOptionDto.builder().optionText("True").optionOrder(1).isCorrect(true).build(),
@@ -179,7 +174,6 @@ class QuestionIntegrationTest {
                 .courseId(1L)
                 .questionText("Describe the four ACID properties in database management systems.")
                 .questionType(QuestionType.ESSAY)
-                .difficultyLevel(DifficultyLevel.HARD)
                 .defaultMarks(BigDecimal.valueOf(8.00))
                 .explanation("Grading Criteria: Atomicity (2), Consistency (2), Isolation (2), Durability (2).")
                 .options(List.of())

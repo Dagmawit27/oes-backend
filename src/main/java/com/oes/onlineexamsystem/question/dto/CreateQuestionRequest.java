@@ -1,6 +1,5 @@
 package com.oes.onlineexamsystem.question.dto;
 
-import com.oes.onlineexamsystem.question.entity.DifficultyLevel;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -32,10 +31,6 @@ public class CreateQuestionRequest {
 
     @NotNull(message = "Question type is required")
     private QuestionType questionType;
-
-    @Builder.Default
-    @NotNull(message = "Difficulty level is required")
-    private DifficultyLevel difficultyLevel = DifficultyLevel.MEDIUM;
 
     @Builder.Default
     @NotNull(message = "Default marks are required")

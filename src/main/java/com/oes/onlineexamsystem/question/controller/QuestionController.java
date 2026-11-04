@@ -4,7 +4,6 @@ import com.oes.onlineexamsystem.auth.security.UserPrincipal;
 import com.oes.onlineexamsystem.common.dto.ApiResponse;
 import com.oes.onlineexamsystem.common.dto.PagedResponse;
 import com.oes.onlineexamsystem.question.dto.*;
-import com.oes.onlineexamsystem.question.entity.DifficultyLevel;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import com.oes.onlineexamsystem.question.service.QuestionService;
 import jakarta.validation.Valid;
@@ -34,7 +33,6 @@ public class QuestionController {
             @RequestParam(required = false) Long bankId,
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) QuestionType type,
-            @RequestParam(required = false) DifficultyLevel difficulty,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Boolean isActive,
             @RequestParam(required = false) Boolean myQuestionsOnly,
@@ -52,7 +50,7 @@ public class QuestionController {
         }
 
         PagedResponse<QuestionDto> response = questionService.getQuestions(
-                courseId, bankId, categoryId, type, difficulty, search, isActive, createdById, pageable);
+                courseId, bankId, categoryId, type, search, isActive, createdById, pageable);
 
         return ResponseEntity.ok(ApiResponse.success("Questions retrieved successfully", response));
     }

@@ -49,11 +49,6 @@ public class Question {
     private QuestionType questionType;
 
     @Builder.Default
-    @Enumerated(EnumType.STRING)
-    @Column(name = "difficulty_level", length = 20, nullable = false)
-    private DifficultyLevel difficultyLevel = DifficultyLevel.MEDIUM;
-
-    @Builder.Default
     @Column(name = "default_marks", precision = 5, scale = 2, nullable = false)
     private BigDecimal defaultMarks = BigDecimal.valueOf(1.00);
 

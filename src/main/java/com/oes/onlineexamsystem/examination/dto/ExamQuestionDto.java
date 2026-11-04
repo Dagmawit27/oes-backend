@@ -2,7 +2,6 @@ package com.oes.onlineexamsystem.examination.dto;
 
 import com.oes.onlineexamsystem.examination.entity.ExamQuestion;
 import com.oes.onlineexamsystem.question.dto.QuestionOptionDto;
-import com.oes.onlineexamsystem.question.entity.DifficultyLevel;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import lombok.*;
 
@@ -28,7 +27,6 @@ public class ExamQuestionDto {
     // Rich question properties for instructor/officer preview
     private String questionText;
     private QuestionType questionType;
-    private DifficultyLevel difficultyLevel;
     private String explanation;
     private List<QuestionOptionDto> options;
     private Instant createdAt;
@@ -48,7 +46,6 @@ public class ExamQuestionDto {
         if (eq.getQuestion() != null) {
             builder.questionText(eq.getQuestion().getQuestionText())
                     .questionType(eq.getQuestion().getQuestionType())
-                    .difficultyLevel(eq.getQuestion().getDifficultyLevel())
                     .explanation(eq.getQuestion().getExplanation());
 
             if (eq.getQuestion().getOptions() != null) {

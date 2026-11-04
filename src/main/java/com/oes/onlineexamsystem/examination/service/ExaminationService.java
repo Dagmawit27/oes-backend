@@ -390,7 +390,6 @@ public class ExaminationService {
             snapshot.put("id", question.getId());
             snapshot.put("questionText", question.getQuestionText());
             snapshot.put("questionType", question.getQuestionType().name());
-            snapshot.put("difficultyLevel", question.getDifficultyLevel().name());
             snapshot.put("assignedMarks", assignedMarks);
             snapshot.put("defaultMarks", question.getDefaultMarks());
             snapshot.put("explanation", question.getExplanation());

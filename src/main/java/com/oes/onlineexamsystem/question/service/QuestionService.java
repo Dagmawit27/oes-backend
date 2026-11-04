@@ -54,11 +54,10 @@ public class QuestionService {
                                                    Long bankId,
                                                    Long categoryId,
                                                    QuestionType type,
-                                                   DifficultyLevel difficulty,
                                                    String search,
                                                    Boolean isActive,
                                                    Pageable pageable) {
-        return getQuestions(courseId, bankId, categoryId, type, difficulty, search, isActive, null, pageable);
+        return getQuestions(courseId, bankId, categoryId, type, search, isActive, null, pageable);
     }
 
     @Transactional(readOnly = true)
@@ -66,7 +65,6 @@ public class QuestionService {
                                                    Long bankId,
                                                    Long categoryId,
                                                    QuestionType type,
-                                                   DifficultyLevel difficulty,
                                                    String search,
                                                    Boolean isActive,
                                                    Long createdById,
@@ -86,9 +84,6 @@ public class QuestionService {
             }
             if (type != null) {
                 predicates.add(cb.equal(root.get("questionType"), type));
-            }
-            if (difficulty != null) {
-                predicates.add(cb.equal(root.get("difficultyLevel"), difficulty));
             }
             if (isActive != null) {
                 predicates.add(cb.equal(root.get("isActive"), isActive));
@@ -170,7 +165,6 @@ public class QuestionService {
                 .createdBy(user)
                 .questionText(request.getQuestionText().trim())
                 .questionType(request.getQuestionType())
-                .difficultyLevel(request.getDifficultyLevel() != null ? request.getDifficultyLevel() : DifficultyLevel.MEDIUM)
                 .defaultMarks(request.getDefaultMarks())
                 .explanation(request.getExplanation())
                 .version(1)
@@ -227,7 +221,6 @@ public class QuestionService {
 
         question.setQuestionText(request.getQuestionText().trim());
         question.setQuestionType(request.getQuestionType());
-        question.setDifficultyLevel(request.getDifficultyLevel());
         question.setDefaultMarks(request.getDefaultMarks());
         question.setExplanation(request.getExplanation());
         if (request.getIsActive() != null) {
@@ -286,7 +279,6 @@ public class QuestionService {
                 .createdBy(user)
                 .questionText(original.getQuestionText() + " (Copy)")
                 .questionType(original.getQuestionType())
-                .difficultyLevel(original.getDifficultyLevel())
                 .defaultMarks(original.getDefaultMarks())
                 .explanation(original.getExplanation())
                 .version(1)

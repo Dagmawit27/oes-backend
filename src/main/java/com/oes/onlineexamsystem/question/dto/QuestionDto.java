@@ -1,6 +1,5 @@
 package com.oes.onlineexamsystem.question.dto;
 
-import com.oes.onlineexamsystem.question.entity.DifficultyLevel;
 import com.oes.onlineexamsystem.question.entity.Question;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
 import lombok.AllArgsConstructor;
@@ -35,7 +34,6 @@ public class QuestionDto {
 
     private String questionText;
     private QuestionType questionType;
-    private DifficultyLevel difficultyLevel;
     private BigDecimal defaultMarks;
     private String explanation;
     private Integer version;
@@ -66,7 +64,6 @@ public class QuestionDto {
                 .createdByName(question.getCreatedBy().getFullName())
                 .questionText(question.getQuestionText())
                 .questionType(question.getQuestionType())
-                .difficultyLevel(question.getDifficultyLevel())
                 .defaultMarks(question.getDefaultMarks())
                 .explanation(question.getExplanation())
                 .version(question.getVersion())
