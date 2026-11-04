@@ -7,6 +7,7 @@ import com.oes.onlineexamsystem.academic.repository.DepartmentRepository;
 import com.oes.onlineexamsystem.academic.repository.InstructorRepository;
 import com.oes.onlineexamsystem.common.exception.DuplicateResourceException;
 import com.oes.onlineexamsystem.common.exception.ResourceNotFoundException;
+import com.oes.onlineexamsystem.user.entity.RoleName;
 import com.oes.onlineexamsystem.user.entity.User;
 import com.oes.onlineexamsystem.user.repository.UserRepository;
 import org.springframework.stereotype.Service;
@@ -29,8 +30,9 @@ public class InstructorService {
         this.departmentRepository = departmentRepository;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<InstructorDto> getAllInstructors() {
+        syncInstructorsFromUsers();
         return instructorRepository.findAll().stream()
                 .map(InstructorDto::fromEntity)
                 .toList();
@@ -41,6 +43,36 @@ public class InstructorService {
         Instructor instructor = instructorRepository.findByUserId(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Instructor", "userId", userId));
         return InstructorDto.fromEntity(instructor);
+    }
+
+    @Transactional
+    public void syncInstructorsFromUsers() {
+        List<User> instructorUsers = userRepository.findAll().stream()
+                .filter(u -> u.getRoles() != null && u.getRoles().stream()
+                        .anyMatch(r -> r.getName() == RoleName.ROLE_INSTRUCTOR))
+                .toList();
+
+        List<Department> departments = departmentRepository.findAll();
+        Department defaultDept = departments.isEmpty() ? null : departments.get(0);
+
+        for (User u : instructorUsers) {
+            if (!instructorRepository.existsByUserId(u.getId())) {
+                if (defaultDept != null) {
+                    String baseEmpId = "INS-" + String.format("%03d", u.getId());
+                    String empId = baseEmpId;
+                    if (instructorRepository.existsByEmployeeIdIgnoreCase(empId)) {
+                        empId = "INS-" + u.getId() + "-" + (System.currentTimeMillis() % 1000);
+                    }
+                    Instructor instructor = Instructor.builder()
+                            .user(u)
+                            .department(defaultDept)
+                            .employeeId(empId)
+                            .specialization("General Faculty")
+                            .build();
+                    instructorRepository.save(instructor);
+                }
+            }
+        }
     }
 
     @Transactional
