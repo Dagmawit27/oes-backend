@@ -48,17 +48,68 @@ public class StudentService {
         this.passwordEncoder = passwordEncoder;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
+    public void syncStudentsFromUsers() {
+        List<User> studentUsers = userRepository.findAll().stream()
+                .filter(u -> u.getRoles() != null && u.getRoles().stream()
+                        .anyMatch(r -> r.getName() == RoleName.ROLE_STUDENT))
+                .toList();
+
+        List<Program> programs = programRepository.findAll();
+        Program defaultProgram = programs.isEmpty() ? null : programs.get(0);
+
+        for (User u : studentUsers) {
+            if (!studentRepository.existsByUserId(u.getId())) {
+                if (defaultProgram != null) {
+                    String baseRegNo = "STU-" + String.format("%04d", u.getId());
+                    String regNo = baseRegNo;
+                    if (studentRepository.existsByRegistrationNumberIgnoreCase(regNo)) {
+                        regNo = "STU-" + u.getId() + "-" + (System.currentTimeMillis() % 1000);
+                    }
+                    Student student = Student.builder()
+                            .user(u)
+                            .program(defaultProgram)
+                            .registrationNumber(regNo)
+                            .yearOfStudy(1)
+                            .build();
+                    studentRepository.save(student);
+                }
+            }
+        }
+    }
+
+    @Transactional
     public List<StudentDto> getAllStudents() {
+        syncStudentsFromUsers();
         return studentRepository.findAll().stream()
                 .map(StudentDto::fromEntity)
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StudentDto getStudentByUserId(Long userId) {
         Student student = studentRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Student", "userId", userId));
+                .orElseGet(() -> {
+                    User u = userRepository.findById(userId)
+                            .orElseThrow(() -> new ResourceNotFoundException("Student", "userId", userId));
+                    if (u.getRoles() != null && u.getRoles().stream().anyMatch(r -> r.getName() == RoleName.ROLE_STUDENT)) {
+                        List<Program> programs = programRepository.findAll();
+                        if (!programs.isEmpty()) {
+                            String regNo = "STU-" + String.format("%04d", u.getId());
+                            if (studentRepository.existsByRegistrationNumberIgnoreCase(regNo)) {
+                                regNo = "STU-" + u.getId() + "-" + (System.currentTimeMillis() % 1000);
+                            }
+                            Student newStudent = Student.builder()
+                                    .user(u)
+                                    .program(programs.get(0))
+                                    .registrationNumber(regNo)
+                                    .yearOfStudy(1)
+                                    .build();
+                            return studentRepository.save(newStudent);
+                        }
+                    }
+                    throw new ResourceNotFoundException("Student", "userId", userId);
+                });
         return StudentDto.fromEntity(student);
     }
 

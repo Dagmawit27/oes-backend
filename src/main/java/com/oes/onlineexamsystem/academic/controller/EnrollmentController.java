@@ -41,6 +41,14 @@ public class EnrollmentController {
         return ResponseEntity.ok(ApiResponse.success("Enrolled courses retrieved successfully", enrollments));
     }
 
+    @GetMapping("/my-students")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ResponseEntity<ApiResponse<List<EnrollmentDto>>> getMyStudents(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        List<EnrollmentDto> enrollments = enrollmentService.getEnrollmentsForInstructor(principal.getId());
+        return ResponseEntity.ok(ApiResponse.success("Instructor students retrieved successfully", enrollments));
+    }
+
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<EnrollmentDto>> enrollStudent(@Valid @RequestBody EnrollmentDto dto) {

@@ -5,13 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.oes.onlineexamsystem.academic.entity.Course;
 import com.oes.onlineexamsystem.academic.entity.CourseOffering;
 import com.oes.onlineexamsystem.academic.entity.Enrollment;
+import com.oes.onlineexamsystem.academic.entity.EnrollmentStatus;
+import com.oes.onlineexamsystem.academic.entity.Instructor;
 import com.oes.onlineexamsystem.academic.entity.Student;
 import com.oes.onlineexamsystem.academic.repository.CourseOfferingRepository;
 import com.oes.onlineexamsystem.academic.repository.EnrollmentRepository;
+import com.oes.onlineexamsystem.academic.repository.InstructorRepository;
 import com.oes.onlineexamsystem.academic.repository.StudentRepository;
+import com.oes.onlineexamsystem.academic.service.InstructorService;
 import com.oes.onlineexamsystem.common.exception.BusinessRuleException;
 import com.oes.onlineexamsystem.common.exception.ResourceNotFoundException;
 import com.oes.onlineexamsystem.common.exception.UnauthorizedException;
+import com.oes.onlineexamsystem.examination.dto.ExaminationDto;
 import com.oes.onlineexamsystem.examination.entity.ExamQuestion;
 import com.oes.onlineexamsystem.examination.entity.ExamStatus;
 import com.oes.onlineexamsystem.examination.entity.Examination;
@@ -27,6 +32,7 @@ import com.oes.onlineexamsystem.notification.service.NotificationService;
 import com.oes.onlineexamsystem.question.entity.Question;
 import com.oes.onlineexamsystem.question.entity.QuestionOption;
 import com.oes.onlineexamsystem.question.entity.QuestionType;
+import com.oes.onlineexamsystem.question.repository.QuestionRepository;
 import com.oes.onlineexamsystem.result.dto.*;
 import com.oes.onlineexamsystem.result.entity.*;
 import com.oes.onlineexamsystem.result.repository.ExamResultRepository;
@@ -66,6 +72,9 @@ public class GradingAndResultService {
     private final ExamEligibilityRepository eligibilityRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final QuestionRepository questionRepository;
+    private final InstructorRepository instructorRepository;
+    private final InstructorService instructorService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -791,5 +800,78 @@ public class GradingAndResultService {
                 .filter(o -> Boolean.TRUE.equals(o.getIsCorrect()))
                 .map(QuestionOption::getId)
                 .collect(Collectors.toSet());
+    }
+
+    @Transactional(readOnly = true)
+    public InstructorDashboardStatsDto getInstructorDashboardStats(Long userId) {
+        Instructor instructor = instructorRepository.findByUserId(userId).orElse(null);
+        if (instructor == null) {
+            instructorService.syncInstructorsFromUsers();
+            instructor = instructorRepository.findByUserId(userId).orElse(null);
+        }
+
+        List<CourseOffering> offerings = instructor != null
+                ? courseOfferingRepository.findByInstructorId(instructor.getId())
+                : List.of();
+
+        long assignedCoursesCount = offerings.size();
+        long totalEnrolledStudents = offerings.stream()
+                .mapToLong(o -> enrollmentRepository.countByCourseOfferingIdAndStatus(o.getId(), EnrollmentStatus.ACTIVE))
+                .sum();
+
+        long totalQuestionsCount = questionRepository.countByCreatedById(userId);
+
+        List<Examination> exams = examinationRepository.findByCreatedById(userId);
+        long totalExamsCount = exams.size();
+        long draftExamsCount = exams.stream().filter(e -> e.getStatus() == ExamStatus.DRAFT).count();
+        long pendingReviewExamsCount = exams.stream().filter(e -> e.getStatus() == ExamStatus.SUBMITTED).count();
+        long approvedExamsCount = exams.stream()
+                .filter(e -> e.getStatus() == ExamStatus.APPROVED || e.getStatus() == ExamStatus.SCHEDULED)
+                .count();
+
+        long pendingGradingSubmissionsCount = 0;
+        long completedGradingCount = 0;
+
+        for (Examination exam : exams) {
+            List<ExamAttempt> attempts = attemptRepository.findByExaminationId(exam.getId());
+            for (ExamAttempt att : attempts) {
+                if (att.getStatus() == AttemptStatus.SUBMITTED) {
+                    Optional<ExamResult> resOpt = resultRepository.findByAttemptId(att.getId());
+                    if (resOpt.isPresent()) {
+                        ExamResult res = resOpt.get();
+                        if (res.getEarnedMarks() == null || res.getPublicationStatus() != PublicationStatus.PUBLISHED) {
+                            pendingGradingSubmissionsCount++;
+                        } else {
+                            completedGradingCount++;
+                        }
+                    } else {
+                        pendingGradingSubmissionsCount++;
+                    }
+                }
+            }
+        }
+
+        List<ExaminationDto> recentExams = exams.stream()
+                .sorted((a, b) -> {
+                    Instant tA = a.getCreatedAt() != null ? a.getCreatedAt() : Instant.EPOCH;
+                    Instant tB = b.getCreatedAt() != null ? b.getCreatedAt() : Instant.EPOCH;
+                    return tB.compareTo(tA);
+                })
+                .limit(5)
+                .map(ExaminationDto::fromEntity)
+                .toList();
+
+        return InstructorDashboardStatsDto.builder()
+                .assignedCoursesCount(assignedCoursesCount)
+                .totalEnrolledStudents(totalEnrolledStudents)
+                .totalQuestionsCount(totalQuestionsCount)
+                .totalExamsCount(totalExamsCount)
+                .draftExamsCount(draftExamsCount)
+                .pendingReviewExamsCount(pendingReviewExamsCount)
+                .approvedExamsCount(approvedExamsCount)
+                .pendingGradingSubmissionsCount(pendingGradingSubmissionsCount)
+                .completedGradingCount(completedGradingCount)
+                .recentExams(recentExams)
+                .build();
     }
 }

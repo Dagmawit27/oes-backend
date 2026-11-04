@@ -37,15 +37,22 @@ public class QuestionController {
             @RequestParam(required = false) DifficultyLevel difficulty,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Boolean isActive,
+            @RequestParam(required = false) Boolean myQuestionsOnly,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "id,desc") String[] sort) {
+            @RequestParam(defaultValue = "id,desc") String[] sort,
+            @AuthenticationPrincipal UserPrincipal principal) {
 
         Sort.Direction direction = Sort.Direction.fromString(sort.length > 1 ? sort[1] : "desc");
         Pageable pageable = PageRequest.of(page, size, Sort.by(direction, sort[0]));
 
+        Long createdById = null;
+        if (Boolean.TRUE.equals(myQuestionsOnly) && principal != null) {
+            createdById = principal.getId();
+        }
+
         PagedResponse<QuestionDto> response = questionService.getQuestions(
-                courseId, bankId, categoryId, type, difficulty, search, isActive, pageable);
+                courseId, bankId, categoryId, type, difficulty, search, isActive, createdById, pageable);
 
         return ResponseEntity.ok(ApiResponse.success("Questions retrieved successfully", response));
     }

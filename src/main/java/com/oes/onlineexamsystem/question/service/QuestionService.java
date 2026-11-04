@@ -58,6 +58,19 @@ public class QuestionService {
                                                    String search,
                                                    Boolean isActive,
                                                    Pageable pageable) {
+        return getQuestions(courseId, bankId, categoryId, type, difficulty, search, isActive, null, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public PagedResponse<QuestionDto> getQuestions(Long courseId,
+                                                   Long bankId,
+                                                   Long categoryId,
+                                                   QuestionType type,
+                                                   DifficultyLevel difficulty,
+                                                   String search,
+                                                   Boolean isActive,
+                                                   Long createdById,
+                                                   Pageable pageable) {
 
         Specification<Question> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
@@ -79,6 +92,9 @@ public class QuestionService {
             }
             if (isActive != null) {
                 predicates.add(cb.equal(root.get("isActive"), isActive));
+            }
+            if (createdById != null) {
+                predicates.add(cb.equal(root.get("createdBy").get("id"), createdById));
             }
             if (StringUtils.hasText(search)) {
                 predicates.add(cb.like(cb.lower(root.get("questionText")), "%" + search.trim().toLowerCase() + "%"));

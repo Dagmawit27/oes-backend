@@ -5,9 +5,11 @@ import com.oes.onlineexamsystem.academic.entity.*;
 import com.oes.onlineexamsystem.academic.repository.*;
 import com.oes.onlineexamsystem.common.exception.DuplicateResourceException;
 import com.oes.onlineexamsystem.common.exception.ResourceNotFoundException;
+import com.oes.onlineexamsystem.common.exception.UnauthorizedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -18,17 +20,20 @@ public class CourseOfferingService {
     private final SemesterRepository semesterRepository;
     private final InstructorRepository instructorRepository;
     private final EnrollmentRepository enrollmentRepository;
+    private final InstructorService instructorService;
 
     public CourseOfferingService(CourseOfferingRepository courseOfferingRepository,
                                  CourseRepository courseRepository,
                                  SemesterRepository semesterRepository,
                                  InstructorRepository instructorRepository,
-                                 EnrollmentRepository enrollmentRepository) {
+                                 EnrollmentRepository enrollmentRepository,
+                                 InstructorService instructorService) {
         this.courseOfferingRepository = courseOfferingRepository;
         this.courseRepository = courseRepository;
         this.semesterRepository = semesterRepository;
         this.instructorRepository = instructorRepository;
         this.enrollmentRepository = enrollmentRepository;
+        this.instructorService = instructorService;
     }
 
     @Transactional(readOnly = true)
@@ -52,14 +57,30 @@ public class CourseOfferingService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<CourseOfferingDto> getOfferingsByInstructorUserId(Long userId) {
-        Instructor instructor = instructorRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Instructor", "userId", userId));
+        Instructor instructor = instructorRepository.findByUserId(userId).orElse(null);
+        if (instructor == null) {
+            instructorService.syncInstructorsFromUsers();
+            instructor = instructorRepository.findByUserId(userId).orElse(null);
+        }
+        if (instructor == null) {
+            return Collections.emptyList();
+        }
 
         return courseOfferingRepository.findByInstructorId(instructor.getId()).stream()
                 .map(this::mapOfferingWithCount)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public void verifyInstructorAccess(Long offeringId, Long userId, boolean isPrivileged) {
+        if (isPrivileged) return;
+        CourseOffering offering = courseOfferingRepository.findById(offeringId)
+                .orElseThrow(() -> new ResourceNotFoundException("CourseOffering", "id", offeringId));
+        if (offering.getInstructor() == null || !offering.getInstructor().getUser().getId().equals(userId)) {
+            throw new UnauthorizedException("You are not authorized to view students for this course offering");
+        }
     }
 
     @Transactional

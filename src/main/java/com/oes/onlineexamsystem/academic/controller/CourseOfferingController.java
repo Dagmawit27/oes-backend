@@ -45,7 +45,14 @@ public class CourseOfferingController {
 
     @GetMapping("/{id}/students")
     @PreAuthorize("hasAnyRole('ADMIN', 'INSTRUCTOR', 'EXAM_OFFICER')")
-    public ResponseEntity<ApiResponse<List<EnrollmentDto>>> getEnrolledStudents(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<List<EnrollmentDto>>> getEnrolledStudents(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        boolean isPrivileged = principal != null && principal.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN") || a.getAuthority().equals("ROLE_EXAM_OFFICER"));
+        Long userId = principal != null ? principal.getId() : null;
+        courseOfferingService.verifyInstructorAccess(id, userId, isPrivileged);
+
         List<EnrollmentDto> students = enrollmentService.getEnrollmentsByOffering(id);
         return ResponseEntity.ok(ApiResponse.success("Enrolled students retrieved successfully", students));
     }
