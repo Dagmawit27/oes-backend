@@ -12,6 +12,8 @@ import java.math.BigDecimal;
 public class StudentGradeDetailDto {
     private Integer questionOrder;
     private String questionText;
+    private String questionType;
+    private Boolean isAutoGraded;
     private BigDecimal awardedMarks;
     private BigDecimal maximumMarks;
     private String feedback;

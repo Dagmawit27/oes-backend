@@ -572,9 +572,15 @@ public class GradingAndResultService {
                     // Load question details for student view (safe projection without answer keys)
                     List<GradeDetail> gds = gradeDetailRepository.findByExamResultId(r.getId());
                     for (GradeDetail gd : gds) {
+                        String qType = null;
+                        if (gd.getExamQuestion() != null && gd.getExamQuestion().getQuestion() != null && gd.getExamQuestion().getQuestion().getQuestionType() != null) {
+                            qType = gd.getExamQuestion().getQuestion().getQuestionType().name();
+                        }
                         details.add(StudentGradeDetailDto.builder()
-                                .questionOrder(gd.getExamQuestion().getQuestionOrder())
-                                .questionText(gd.getExamQuestion().getQuestion().getQuestionText())
+                                .questionOrder(gd.getExamQuestion() != null ? gd.getExamQuestion().getQuestionOrder() : null)
+                                .questionText(gd.getExamQuestion() != null && gd.getExamQuestion().getQuestion() != null ? gd.getExamQuestion().getQuestion().getQuestionText() : "")
+                                .questionType(qType)
+                                .isAutoGraded(gd.getIsAutoGraded())
                                 .awardedMarks(gd.getAwardedMarks())
                                 .maximumMarks(gd.getMaximumMarks())
                                 .feedback(gd.getFeedback())
