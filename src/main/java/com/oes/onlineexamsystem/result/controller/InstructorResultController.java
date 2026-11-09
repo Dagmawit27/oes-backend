@@ -25,7 +25,7 @@ public class InstructorResultController {
      * Retrieve live metrics, counts, and recent examinations for instructor dashboard.
      */
     @GetMapping("/dashboard-stats")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_EXAM_OFFICER', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN')")
     public ResponseEntity<ApiResponse<InstructorDashboardStatsDto>> getDashboardStats(
             @AuthenticationPrincipal UserPrincipal principal) {
         InstructorDashboardStatsDto stats = gradingAndResultService.getInstructorDashboardStats(principal.getId());
@@ -36,7 +36,7 @@ public class InstructorResultController {
      * Retrieve examination roster results for an assigned course examination.
      */
     @GetMapping("/exams/{examId}/results")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_EXAM_OFFICER', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN')")
     public ResponseEntity<ApiResponse<List<CourseExamRosterItemDto>>> getExamResults(
             @PathVariable Long examId,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -52,7 +52,7 @@ public class InstructorResultController {
      * Retrieve full grading view for an attempt (questions, student answers, maximum marks, current marks).
      */
     @GetMapping("/attempts/{attemptId}/grading")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_EXAM_OFFICER', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN')")
     public ResponseEntity<ApiResponse<AttemptGradingDto>> getAttemptGrading(
             @PathVariable Long attemptId,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -68,7 +68,7 @@ public class InstructorResultController {
      * Save draft manual grades for an attempt without finalizing.
      */
     @PutMapping("/attempts/{attemptId}/grades")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'ADMIN')")
     public ResponseEntity<ApiResponse<AttemptGradingDto>> saveDraftGrades(
             @PathVariable Long attemptId,
             @Valid @RequestBody SaveGradesRequest request,
@@ -85,7 +85,7 @@ public class InstructorResultController {
      * Finalize and complete grading for an attempt. Validates all questions are awarded marks.
      */
     @PostMapping("/attempts/{attemptId}/complete-grading")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'ADMIN')")
     public ResponseEntity<ApiResponse<AttemptGradingDto>> completeGrading(
             @PathVariable Long attemptId,
             @Valid @RequestBody(required = false) SaveGradesRequest request,
@@ -102,7 +102,7 @@ public class InstructorResultController {
      * Audited correction to a published result.
      */
     @PostMapping("/results/{resultId}/correct")
-    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN', 'ROLE_INSTRUCTOR', 'ROLE_EXAM_OFFICER', 'ROLE_ADMIN')")
+    @PreAuthorize("hasAnyRole('INSTRUCTOR', 'EXAM_OFFICER', 'ADMIN')")
     public ResponseEntity<ApiResponse<Void>> correctPublishedResult(
             @PathVariable Long resultId,
             @Valid @RequestBody ResultCorrectionRequest request,

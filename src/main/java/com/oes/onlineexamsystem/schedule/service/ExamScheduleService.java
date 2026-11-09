@@ -1,6 +1,8 @@
 package com.oes.onlineexamsystem.schedule.service;
 
+import com.oes.onlineexamsystem.academic.entity.CourseOffering;
 import com.oes.onlineexamsystem.academic.entity.Enrollment;
+import com.oes.onlineexamsystem.academic.entity.EnrollmentStatus;
 import com.oes.onlineexamsystem.academic.entity.Student;
 import com.oes.onlineexamsystem.academic.repository.EnrollmentRepository;
 import com.oes.onlineexamsystem.academic.repository.StudentRepository;
@@ -399,6 +401,21 @@ public class ExamScheduleService {
                 .build();
 
         ExamEligibility saved = eligibilityRepository.save(eligibility);
+
+        // Ensure student is enrolled in the course offering if not already
+        if (schedule.getExamination() != null && schedule.getExamination().getCourseOffering() != null) {
+            CourseOffering co = schedule.getExamination().getCourseOffering();
+            if (!enrollmentRepository.existsByStudentIdAndCourseOfferingId(student.getId(), co.getId())) {
+                Enrollment enrollment = Enrollment.builder()
+                        .student(student)
+                        .courseOffering(co)
+                        .status(EnrollmentStatus.ACTIVE)
+                        .enrolledAt(Instant.now())
+                        .build();
+                enrollmentRepository.save(enrollment);
+            }
+        }
+
         return ExamEligibilityDto.fromEntity(saved);
     }
 

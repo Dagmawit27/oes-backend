@@ -39,8 +39,10 @@ import com.oes.onlineexamsystem.result.repository.ExamResultRepository;
 import com.oes.onlineexamsystem.result.repository.GradeDetailRepository;
 import com.oes.onlineexamsystem.result.repository.ResultCorrectionAuditRepository;
 import com.oes.onlineexamsystem.schedule.entity.ExamEligibility;
+import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
 import com.oes.onlineexamsystem.schedule.entity.NotificationType;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
+import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
 import com.oes.onlineexamsystem.user.entity.User;
 import com.oes.onlineexamsystem.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -70,6 +72,7 @@ public class GradingAndResultService {
     private final EnrollmentRepository enrollmentRepository;
     private final CourseOfferingRepository courseOfferingRepository;
     private final ExamEligibilityRepository eligibilityRepository;
+    private final ExamScheduleRepository scheduleRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final QuestionRepository questionRepository;
@@ -538,12 +541,44 @@ public class GradingAndResultService {
         Student student = studentRepository.findByUserId(userId)
                 .orElseThrow(() -> new UnauthorizedException("Student profile not found for user ID: " + userId));
 
-        // Find student enrollments
+        // Find all distinct course offerings associated with the student (via enrollments, eligibilities, attempts, or results)
+        Set<CourseOffering> offerings = new LinkedHashSet<>();
+
+        // 1. Direct enrollments
         List<Enrollment> enrollments = enrollmentRepository.findByStudentId(student.getId());
+        for (Enrollment enr : enrollments) {
+            if (enr.getCourseOffering() != null) {
+                offerings.add(enr.getCourseOffering());
+            }
+        }
+
+        // 2. Exam eligibilities
+        List<ExamEligibility> eligibilities = eligibilityRepository.findByStudentId(student.getId());
+        for (ExamEligibility ee : eligibilities) {
+            if (ee.getSchedule() != null && ee.getSchedule().getExamination() != null && ee.getSchedule().getExamination().getCourseOffering() != null) {
+                offerings.add(ee.getSchedule().getExamination().getCourseOffering());
+            }
+        }
+
+        // 3. Exam attempts
+        List<ExamAttempt> studentAttempts = attemptRepository.findByStudentId(student.getId());
+        for (ExamAttempt att : studentAttempts) {
+            if (att.getExamination() != null && att.getExamination().getCourseOffering() != null) {
+                offerings.add(att.getExamination().getCourseOffering());
+            }
+        }
+
+        // 4. Exam results
+        List<ExamResult> studentResults = resultRepository.findByStudentId(student.getId());
+        for (ExamResult res : studentResults) {
+            if (res.getExamination() != null && res.getExamination().getCourseOffering() != null) {
+                offerings.add(res.getExamination().getCourseOffering());
+            }
+        }
+
         List<StudentCourseResultsDto> courseResults = new ArrayList<>();
 
-        for (Enrollment enr : enrollments) {
-            CourseOffering co = enr.getCourseOffering();
+        for (CourseOffering co : offerings) {
             if (co == null || !Boolean.TRUE.equals(co.getIsActive())) continue;
 
             Course course = co.getCourse();
@@ -697,20 +732,45 @@ public class GradingAndResultService {
         String courseTitle = co.getCourse().getCode() + " - " + co.getCourse().getName();
 
         // 1. Get all students eligible from enrollment
-        List<Enrollment> enrollments = enrollmentRepository.findByCourseOfferingId(co.getId());
-        Set<Student> students = enrollments.stream()
-                .map(Enrollment::getStudent)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<Student> students = new LinkedHashSet<>();
+        if (co != null) {
+            List<Enrollment> enrollments = enrollmentRepository.findByCourseOfferingId(co.getId());
+            for (Enrollment enr : enrollments) {
+                if (enr.getStudent() != null) {
+                    students.add(enr.getStudent());
+                }
+            }
+        }
 
-        // 2. Fetch all attempts and results for this examination
+        // 2. Add students registered via ExamEligibility on any schedule for this exam
+        List<ExamSchedule> schedules = scheduleRepository.findByExaminationId(exam.getId());
+        for (ExamSchedule s : schedules) {
+            List<ExamEligibility> eligibilities = eligibilityRepository.findByScheduleId(s.getId());
+            for (ExamEligibility ee : eligibilities) {
+                if (ee.getStudent() != null) {
+                    students.add(ee.getStudent());
+                }
+            }
+        }
+
+        // 3. Fetch all attempts and results for this examination, including those students
         List<ExamAttempt> attempts = attemptRepository.findAll().stream()
                 .filter(a -> a.getExamination().getId().equals(exam.getId()))
                 .toList();
+        for (ExamAttempt a : attempts) {
+            if (a.getStudent() != null) {
+                students.add(a.getStudent());
+            }
+        }
         Map<Long, ExamAttempt> attemptMap = attempts.stream()
                 .collect(Collectors.toMap(a -> a.getStudent().getId(), a -> a, (a1, a2) -> a1));
 
         List<ExamResult> results = resultRepository.findByExaminationId(exam.getId());
+        for (ExamResult r : results) {
+            if (r.getStudent() != null) {
+                students.add(r.getStudent());
+            }
+        }
         Map<Long, ExamResult> resultMap = results.stream()
                 .collect(Collectors.toMap(r -> r.getStudent().getId(), r -> r, (r1, r2) -> r1));
 
@@ -814,10 +874,15 @@ public class GradingAndResultService {
     private String formatAttemptStatus(AttemptStatus status) {
         if (status == null) return "Not Attempted";
         return switch (status) {
-            case IN_PROGRESS -> "In Progress";
+            case ACTIVE, IN_PROGRESS -> "In Progress";
+            case CONNECTION_PAUSED, RESUME_REQUIRED -> "Connection Paused";
             case SUBMITTED -> "Submitted";
+            case AUTO_SUBMITTED -> "Auto-Submitted";
             case EXPIRED -> "Expired";
+            case CANCELLED -> "Cancelled";
             case ABANDONED -> "Abandoned";
+            case NOT_STARTED, WAITING_FOR_START -> "Not Started";
+            default -> status.name();
         };
     }
 

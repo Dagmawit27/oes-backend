@@ -20,6 +20,8 @@ public interface ExamEligibilityRepository extends JpaRepository<ExamEligibility
 
     List<ExamEligibility> findByScheduleId(Long scheduleId);
 
+    List<ExamEligibility> findByStudentId(Long studentId);
+
     long countByScheduleIdAndEligibilityStatus(Long scheduleId, EligibilityStatus status);
 
     Optional<ExamEligibility> findByScheduleIdAndStudentId(Long scheduleId, Long studentId);
