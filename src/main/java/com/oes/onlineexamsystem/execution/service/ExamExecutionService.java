@@ -23,19 +23,18 @@ import com.oes.onlineexamsystem.question.repository.QuestionOptionRepository;
 import com.oes.onlineexamsystem.result.service.GradingAndResultService;
 import com.oes.onlineexamsystem.schedule.entity.EligibilityStatus;
 import com.oes.onlineexamsystem.schedule.entity.ExamEligibility;
-import com.oes.onlineexamsystem.schedule.entity.ExamNotification;
 import com.oes.onlineexamsystem.schedule.entity.ExamSchedule;
 import com.oes.onlineexamsystem.schedule.entity.NotificationType;
 import com.oes.onlineexamsystem.schedule.entity.ScheduleStatus;
 import com.oes.onlineexamsystem.schedule.repository.ExamEligibilityRepository;
 import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
-import com.oes.onlineexamsystem.schedule.service.ExamScheduleService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
+import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Slf4j
@@ -54,6 +53,7 @@ public class ExamExecutionService {
     private final GradingAndResultService gradingAndResultService;
     private final NotificationService notificationService;
     private final ExamMonitoringService monitoringService;
+    private final PasscodeSecurityService passcodeSecurityService;
 
     public ExamExecutionService(ExamAttemptRepository attemptRepository,
                                 StudentAnswerRepository answerRepository,
@@ -66,7 +66,8 @@ public class ExamExecutionService {
                                 QuestionOptionRepository questionOptionRepository,
                                 GradingAndResultService gradingAndResultService,
                                 NotificationService notificationService,
-                                ExamMonitoringService monitoringService) {
+                                ExamMonitoringService monitoringService,
+                                PasscodeSecurityService passcodeSecurityService) {
         this.attemptRepository = attemptRepository;
         this.answerRepository = answerRepository;
         this.answerOptionRepository = answerOptionRepository;
@@ -79,14 +80,16 @@ public class ExamExecutionService {
         this.gradingAndResultService = gradingAndResultService;
         this.notificationService = notificationService;
         this.monitoringService = monitoringService;
+        this.passcodeSecurityService = passcodeSecurityService;
     }
 
     /**
-     * Start or resume an examination attempt for the authenticated student.
-     * Idempotent: If an active attempt already exists within the deadline, it is safely returned.
+     * Start a fresh examination attempt with Passcode 1 verification,
+     * or return existing active attempt if already started.
      */
     @Transactional
-    public ExamExecutionPayloadDto startOrResumeExam(Long scheduleId, Long userId, String ipAddress, String userAgent) {
+    public ExamExecutionPayloadDto startExam(StartExamRequest request, Long userId, String ipAddress, String userAgent) {
+        Long scheduleId = request.getScheduleId();
         Student student = studentRepository.findByUserId(userId)
                 .orElseThrow(() -> new BusinessRuleException("Authenticated user is not registered as a student."));
 
@@ -104,13 +107,25 @@ public class ExamExecutionService {
             throw new BusinessRuleException("This examination schedule has already completed.");
         }
 
-        // 2. Verify schedule time window
-        if (now.isAfter(schedule.getScheduledCloseAt())) {
-            throw new BusinessRuleException("The examination window for this schedule closed at " + schedule.getScheduledCloseAt());
+        // 2. Authoritative Timezone and Access Window Verification
+        ZoneId collegeZone = ZoneId.of(schedule.getTimezone() != null ? schedule.getTimezone() : "Africa/Addis_Ababa");
+        LocalDate collegeToday = LocalDate.now(collegeZone);
+
+        LocalDate examDate = schedule.getExaminationDate() != null
+                ? schedule.getExaminationDate()
+                : schedule.getScheduledStartAt().atZone(collegeZone).toLocalDate();
+
+        if (collegeToday.isBefore(examDate)) {
+            throw new BusinessRuleException("This examination is scheduled for " + examDate + " (" + schedule.getTimezone() + "). You cannot start before this date.");
         }
+
         if (now.isBefore(schedule.getScheduledStartAt())) {
-            throw new BusinessRuleException("The examination window has not opened yet. Starts at " + schedule.getScheduledStartAt());
+            throw new BusinessRuleException("The examination window has not opened yet. Starts at " + schedule.getScheduledStartTime() + " (" + schedule.getTimezone() + ").");
         }
+
+        Instant accessEndsAt = schedule.getStartAccessEndsAt() != null
+                ? schedule.getStartAccessEndsAt()
+                : ZonedDateTime.of(examDate, LocalTime.of(23, 59, 59), collegeZone).toInstant();
 
         // 3. Verify student eligibility
         ExamEligibility eligibility = eligibilityRepository.findByScheduleIdAndStudentId(schedule.getId(), student.getId())
@@ -125,46 +140,48 @@ public class ExamExecutionService {
                     (eligibility.getReason() != null ? eligibility.getReason() : "Prerequisites not met"));
         }
 
-        // 4. Check for existing active attempt (Idempotent Resume)
-        Optional<ExamAttempt> existingOpt = attemptRepository.findByStudentIdAndScheduleIdAndStatus(
-                student.getId(), schedule.getId(), AttemptStatus.IN_PROGRESS
+        // 4. Check for existing attempt
+        Optional<ExamAttempt> existingOpt = attemptRepository.findByStudentIdAndScheduleIdAndStatusIn(
+                student.getId(), schedule.getId(),
+                List.of(AttemptStatus.ACTIVE, AttemptStatus.IN_PROGRESS, AttemptStatus.CONNECTION_PAUSED, AttemptStatus.RESUME_REQUIRED)
         );
 
         if (existingOpt.isPresent()) {
             ExamAttempt existing = existingOpt.get();
-            // Check if deadline passed
-            if (now.isAfter(existing.getDeadlineAt())) {
-                existing.setStatus(AttemptStatus.EXPIRED);
+            // If already active, refresh heartbeat timestamp
+            if (existing.getStatus() == AttemptStatus.ACTIVE || existing.getStatus() == AttemptStatus.IN_PROGRESS) {
+                existing.setLastHeartbeatAt(now);
+                existing.setLastActivityAt(now);
                 attemptRepository.save(existing);
-                logEvent(existing, ExamEventType.AUTO_SUBMITTED_EXPIRED, "Attempt expired on reconnect", ipAddress, userAgent);
-                throw new BusinessRuleException("Your examination deadline has expired.");
             }
-
-            // Still active: update last activity and return
-            existing.setLastActivityAt(now);
-            attemptRepository.save(existing);
-            logEvent(existing, ExamEventType.RECONNECTED, "Student reconnected to active attempt", ipAddress, userAgent);
-
+            // If attempt is CONNECTION_PAUSED or RESUME_REQUIRED, payload is returned with paused status
+            // so frontend can render the paused overlay and request the required resume passcode without crashing.
             return buildExecutionPayload(existing, exam, schedule, now);
         }
 
-        // 5. Fresh Attempt: Check attempt limits
-        long completedAttempts = attemptRepository.countByStudentIdAndExaminationIdAndStatusIn(
-                student.getId(), exam.getId(), List.of(AttemptStatus.SUBMITTED, AttemptStatus.EXPIRED)
+        // Check if student already submitted or expired
+        long finishedAttempts = attemptRepository.countByStudentIdAndExaminationIdAndStatusIn(
+                student.getId(), exam.getId(), List.of(AttemptStatus.SUBMITTED, AttemptStatus.AUTO_SUBMITTED, AttemptStatus.EXPIRED)
         );
-
         int maxAttempts = exam.getAttemptLimit() != null ? exam.getAttemptLimit() : 1;
-        if (completedAttempts >= maxAttempts) {
-            throw new BusinessRuleException("You have reached the maximum attempt limit (" + maxAttempts + ") for this examination.");
+        if (finishedAttempts >= maxAttempts) {
+            throw new BusinessRuleException("You have already completed or finalized this examination (Attempt limit reached: " + maxAttempts + ").");
         }
 
-        // 6. Calculate official attempt deadline
-        // Enforce: deadline = min(now + durationMinutes, scheduledCloseAt)
-        Instant officialDeadline = ExamScheduleService.calculateOfficialAttemptDeadline(
-                now, schedule.getDurationMinutes(), schedule.getScheduledCloseAt()
-        );
+        // Check start window boundary: Cannot start new attempt after startAccessEndsAt
+        if (now.isAfter(accessEndsAt)) {
+            throw new BusinessRuleException("The examination start window closed at 23:59:59 (" + schedule.getTimezone() + "). New attempts are not permitted.");
+        }
 
-        int attemptNumber = (int) completedAttempts + 1;
+        // 5. Verify Passcode 1 for Initial Start
+        passcodeSecurityService.verifyInitialStartPasscode(schedule, student, request.getPasscode(), ipAddress);
+
+        // 6. Initialize Individual Active-Time Timer
+        // Duration is strictly from Instructor's examination configuration
+        int durationMinutes = exam.getDurationMinutes() != null && exam.getDurationMinutes() > 0 ? exam.getDurationMinutes() : 60;
+        int durationSeconds = durationMinutes * 60;
+
+        int attemptNumber = (int) finishedAttempts + 1;
 
         ExamAttempt newAttempt = ExamAttempt.builder()
                 .examination(exam)
@@ -172,21 +189,27 @@ public class ExamExecutionService {
                 .student(student)
                 .attemptNumber(attemptNumber)
                 .startedAt(now)
-                .deadlineAt(officialDeadline)
-                .status(AttemptStatus.IN_PROGRESS)
+                .activeSince(now)
+                .lastHeartbeatAt(now)
                 .lastActivityAt(now)
+                .durationSeconds(durationSeconds)
+                .remainingActiveSeconds(durationSeconds)
+                .accumulatedActiveSeconds(0)
+                .resumeStage(0)
+                .status(AttemptStatus.ACTIVE)
                 .isGraded(false)
                 .build();
 
         ExamAttempt savedAttempt = attemptRepository.save(newAttempt);
-        logEvent(savedAttempt, ExamEventType.STARTED, "Exam attempt initiated by student", ipAddress, userAgent);
+        logEvent(savedAttempt, ExamEventType.STARTED, "Exam attempt initialized with Passcode 1", ipAddress, userAgent);
+        logEvent(savedAttempt, ExamEventType.PASSCODE_VERIFIED, "Passcode 1 validated successfully", ipAddress, userAgent);
 
         try {
             notificationService.sendNotificationToUser(
                     student.getUser(),
                     NotificationType.EXAM_STARTING,
                     "Examination Started: " + exam.getTitle(),
-                    "Your examination attempt has officially started. Deadline: " + officialDeadline,
+                    "Your examination attempt has officially started. Active duration: " + durationMinutes + " minutes.",
                     schedule
             );
         } catch (Exception e) {
@@ -194,6 +217,130 @@ public class ExamExecutionService {
         }
 
         return buildExecutionPayload(savedAttempt, exam, schedule, now);
+    }
+
+    /**
+     * Resume a paused examination attempt with Passcode 2 or Passcode 3 verification.
+     */
+    @Transactional
+    public ExamExecutionPayloadDto resumeExam(ResumeExamRequest request, Long userId, String ipAddress, String userAgent) {
+        Long attemptId = request.getAttemptId();
+        Student student = studentRepository.findByUserId(userId)
+                .orElseThrow(() -> new BusinessRuleException("Authenticated user is not registered as a student."));
+
+        ExamAttempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam Attempt", "id", attemptId));
+
+        if (!attempt.getStudent().getId().equals(student.getId())) {
+            throw new UnauthorizedException("Unauthorized access to this examination attempt.");
+        }
+
+        if (attempt.getStatus().isFinished()) {
+            throw new BusinessRuleException("Cannot resume an examination that has already been " + attempt.getStatus());
+        }
+
+        if (attempt.getRemainingActiveSeconds() <= 0) {
+            finalizeAutoSubmission(attempt, Instant.now());
+            throw new BusinessRuleException("Your examination time allowance has expired.");
+        }
+
+        // Verify Passcode 2 (stage 1) or Passcode 3 (stage >= 2)
+        passcodeSecurityService.verifyResumePasscode(attempt, request.getPasscode(), ipAddress);
+
+        Instant now = Instant.now();
+        attempt.setStatus(AttemptStatus.ACTIVE);
+        attempt.setActiveSince(now);
+        attempt.setLastHeartbeatAt(now);
+        attempt.setLastResumedAt(now);
+        attempt.setLastActivityAt(now);
+
+        ExamAttempt resumed = attemptRepository.save(attempt);
+        logEvent(resumed, ExamEventType.CONNECTION_RESUMED, "Attempt resumed with verified passcode at stage " + attempt.getResumeStage(), ipAddress, userAgent);
+        logEvent(resumed, ExamEventType.PASSCODE_VERIFIED, "Resume passcode validated successfully", ipAddress, userAgent);
+
+        return buildExecutionPayload(resumed, resumed.getExamination(), resumed.getSchedule(), now);
+    }
+
+    /**
+     * Authoritative periodic heartbeat:
+     * Decrements individual active remaining seconds and monitors connection health.
+     */
+    @Transactional
+    public HeartbeatResponse processHeartbeat(Long attemptId, HeartbeatRequest request, Long userId, String ipAddress) {
+        ExamAttempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam Attempt", "id", attemptId));
+
+        if (!attempt.getStudent().getUser().getId().equals(userId)) {
+            throw new UnauthorizedException("Unauthorized heartbeat access.");
+        }
+
+        Instant now = Instant.now();
+
+        if (attempt.getStatus().isFinished()) {
+            return HeartbeatResponse.builder()
+                    .attemptId(attempt.getId())
+                    .status(attempt.getStatus())
+                    .remainingActiveSeconds(0)
+                    .accumulatedActiveSeconds(attempt.getAccumulatedActiveSeconds())
+                    .resumeStage(attempt.getResumeStage())
+                    .isTerminated(true)
+                    .serverCurrentTime(now)
+                    .build();
+        }
+
+        if (attempt.getStatus() == AttemptStatus.CONNECTION_PAUSED || attempt.getStatus() == AttemptStatus.RESUME_REQUIRED) {
+            return HeartbeatResponse.builder()
+                    .attemptId(attempt.getId())
+                    .status(attempt.getStatus())
+                    .remainingActiveSeconds(attempt.getRemainingActiveSeconds())
+                    .accumulatedActiveSeconds(attempt.getAccumulatedActiveSeconds())
+                    .resumeStage(attempt.getResumeStage())
+                    .isTerminated(false)
+                    .serverCurrentTime(now)
+                    .build();
+        }
+
+        // Attempt is ACTIVE (or IN_PROGRESS): Compute active elapsed interval
+        Instant referenceTime = attempt.getActiveSince() != null ? attempt.getActiveSince() : attempt.getLastHeartbeatAt();
+        if (referenceTime == null) {
+            referenceTime = now;
+        }
+
+        long elapsedSeconds = Math.max(0, ChronoUnit.SECONDS.between(referenceTime, now));
+
+        // Deduct active elapsed time
+        int updatedRemaining = Math.max(0, attempt.getRemainingActiveSeconds() - (int) elapsedSeconds);
+        attempt.setRemainingActiveSeconds(updatedRemaining);
+        attempt.setAccumulatedActiveSeconds(attempt.getAccumulatedActiveSeconds() + (int) elapsedSeconds);
+        attempt.setActiveSince(now);
+        attempt.setLastHeartbeatAt(now);
+        attempt.setLastActivityAt(now);
+
+        // Check if individual active time has run out
+        if (updatedRemaining <= 0) {
+            finalizeAutoSubmission(attempt, now);
+            return HeartbeatResponse.builder()
+                    .attemptId(attempt.getId())
+                    .status(AttemptStatus.AUTO_SUBMITTED)
+                    .remainingActiveSeconds(0)
+                    .accumulatedActiveSeconds(attempt.getAccumulatedActiveSeconds())
+                    .resumeStage(attempt.getResumeStage())
+                    .isTerminated(true)
+                    .serverCurrentTime(now)
+                    .build();
+        }
+
+        ExamAttempt saved = attemptRepository.save(attempt);
+
+        return HeartbeatResponse.builder()
+                .attemptId(saved.getId())
+                .status(saved.getStatus())
+                .remainingActiveSeconds(saved.getRemainingActiveSeconds())
+                .accumulatedActiveSeconds(saved.getAccumulatedActiveSeconds())
+                .resumeStage(saved.getResumeStage())
+                .isTerminated(false)
+                .serverCurrentTime(now)
+                .build();
     }
 
     /**
@@ -213,21 +360,34 @@ public class ExamExecutionService {
         Instant now = Instant.now();
 
         // 2. Verify attempt status
-        if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
+        if (attempt.getStatus() == AttemptStatus.CONNECTION_PAUSED || attempt.getStatus() == AttemptStatus.RESUME_REQUIRED) {
+            throw new BusinessRuleException("Answers cannot be saved. Your attempt is paused due to a connection interruption. Please resume the examination.");
+        }
+
+        if (attempt.getStatus().isFinished()) {
             throw new BusinessRuleException("Answers cannot be saved. Attempt status is: " + attempt.getStatus());
         }
 
-        // 3. Verify deadline
-        if (now.isAfter(attempt.getDeadlineAt())) {
-            attempt.setStatus(AttemptStatus.EXPIRED);
-            attemptRepository.save(attempt);
-            logEvent(attempt, ExamEventType.AUTO_SUBMITTED_EXPIRED, "Expired during answer save attempt", ipAddress, userAgent);
-            throw new BusinessRuleException("Examination deadline has expired at " + attempt.getDeadlineAt());
+        // 3. Update remaining active time
+        Instant refTime = attempt.getActiveSince() != null ? attempt.getActiveSince() : attempt.getLastHeartbeatAt();
+        if (refTime != null) {
+            long elapsed = Math.max(0, ChronoUnit.SECONDS.between(refTime, now));
+            int updatedRemaining = Math.max(0, attempt.getRemainingActiveSeconds() - (int) elapsed);
+            attempt.setRemainingActiveSeconds(updatedRemaining);
+            attempt.setAccumulatedActiveSeconds(attempt.getAccumulatedActiveSeconds() + (int) elapsed);
+            attempt.setActiveSince(now);
         }
 
+        // 4. Verify timer hasn't expired
+        if (attempt.getRemainingActiveSeconds() <= 0) {
+            finalizeAutoSubmission(attempt, now);
+            throw new BusinessRuleException("Examination time allowance has expired.");
+        }
+
+        attempt.setLastHeartbeatAt(now);
         attempt.setLastActivityAt(now);
 
-        // 4. Verify question belongs to examination
+        // 5. Verify question belongs to examination
         ExamQuestion examQuestion = examQuestionRepository.findById(request.getExamQuestionId())
                 .orElseThrow(() -> new ResourceNotFoundException("Exam Question", "id", request.getExamQuestionId()));
 
@@ -235,7 +395,7 @@ public class ExamExecutionService {
             throw new BusinessRuleException("Question does not belong to this examination.");
         }
 
-        // 5. Validate question-type answer format & selected options
+        // 6. Validate question-type answer format & selected options
         Question question = examQuestion.getQuestion();
         List<Long> optionIds = request.getSelectedOptionIds() != null ? request.getSelectedOptionIds() : new ArrayList<>();
 
@@ -245,7 +405,6 @@ public class ExamExecutionService {
             }
         }
 
-        // Verify selected options belong to this question
         List<QuestionOption> validatedOptions = new ArrayList<>();
         if (!optionIds.isEmpty()) {
             for (Long optId : optionIds) {
@@ -258,7 +417,7 @@ public class ExamExecutionService {
             }
         }
 
-        // 6. Find or create StudentAnswer
+        // 7. Find or create StudentAnswer
         StudentAnswer answer = answerRepository.findByAttemptIdAndExamQuestionId(attempt.getId(), examQuestion.getId())
                 .orElseGet(() -> StudentAnswer.builder()
                         .attempt(attempt)
@@ -273,7 +432,6 @@ public class ExamExecutionService {
         }
         answer.setSavedAt(now);
 
-        // Update selected options via cascade/orphanRemoval on the entity collection
         if (answer.getSelectedOptions() == null) {
             answer.setSelectedOptions(new ArrayList<>());
         } else {
@@ -289,6 +447,7 @@ public class ExamExecutionService {
         }
 
         StudentAnswer savedAnswer = answerRepository.saveAndFlush(answer);
+        attemptRepository.save(attempt);
 
         logEvent(attempt, ExamEventType.ANSWER_SAVED, "Answer saved for question order " + examQuestion.getQuestionOrder(), ipAddress, userAgent);
 
@@ -296,7 +455,7 @@ public class ExamExecutionService {
     }
 
     /**
-     * Submit and lock the examination attempt.
+     * Submit and lock the examination attempt early.
      * Idempotent: Subsequent submissions return existing submission summary.
      */
     @Transactional
@@ -304,13 +463,11 @@ public class ExamExecutionService {
         ExamAttempt attempt = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new ResourceNotFoundException("Exam Attempt", "id", attemptId));
 
-        // 1. Verify student ownership
         if (!attempt.getStudent().getUser().getId().equals(userId)) {
             throw new UnauthorizedException("Unauthorized access to this examination attempt.");
         }
 
-        // 2. Idempotency check: Already submitted
-        if (attempt.getStatus() == AttemptStatus.SUBMITTED) {
+        if (attempt.getStatus() == AttemptStatus.SUBMITTED || attempt.getStatus() == AttemptStatus.AUTO_SUBMITTED) {
             return buildSubmissionResult(attempt, "Examination was already submitted successfully.");
         }
 
@@ -320,7 +477,7 @@ public class ExamExecutionService {
 
         Instant now = Instant.now();
 
-        // 3. Lock attempt
+        // Lock attempt
         attempt.setStatus(AttemptStatus.SUBMITTED);
         attempt.setSubmittedAt(now);
         attempt.setLastActivityAt(now);
@@ -366,36 +523,138 @@ public class ExamExecutionService {
     }
 
     /**
-     * Background worker: Automatically marks attempts as EXPIRED if the official deadline has passed.
+     * Background Worker 1: Detects disconnected clients (>35s missing heartbeat)
+     * and transitions them to CONNECTION_PAUSED with frozen remaining time.
      */
-    @Scheduled(fixedDelay = 60000) // Runs every minute
+    @Scheduled(fixedDelay = 15000) // Runs every 15 seconds
     @Transactional
-    public void autoFinalizeExpiredAttempts() {
-        Instant now = Instant.now();
-        List<ExamAttempt> expiredAttempts = attemptRepository.findByStatusAndDeadlineAtBefore(AttemptStatus.IN_PROGRESS, now);
+    public void monitorConnectionHeartbeats() {
+        Instant cutoff = Instant.now().minus(35, ChronoUnit.SECONDS);
+        List<ExamAttempt> staleAttempts = attemptRepository.findByStatusInAndLastHeartbeatAtBefore(
+                List.of(AttemptStatus.ACTIVE, AttemptStatus.IN_PROGRESS), cutoff
+        );
 
-        for (ExamAttempt attempt : expiredAttempts) {
-            attempt.setStatus(AttemptStatus.EXPIRED);
-            attempt.setSubmittedAt(attempt.getDeadlineAt()); // Capped at official deadline
-            ExamAttempt saved = attemptRepository.save(attempt);
-            logEvent(saved, ExamEventType.AUTO_SUBMITTED_EXPIRED, "System auto-finalized attempt upon deadline expiration", "SYSTEM", "BACKGROUND_SCHEDULER");
-            try {
-                notificationService.sendNotificationToUser(
-                        attempt.getStudent().getUser(),
-                        NotificationType.EXAM_COMPLETED,
-                        "Examination Sitting Closed: " + attempt.getExamination().getTitle(),
-                        "The examination deadline has arrived and your attempt was officially closed.",
-                        attempt.getSchedule()
-                );
-            } catch (Exception e) {
-                log.warn("Failed to send expired exam notification: {}", e.getMessage());
-            }
-            try {
-                gradingAndResultService.autoGradeAttempt(saved);
-            } catch (Exception e) {
-                log.error("Failed to auto-grade expired attempt: {}", saved.getId(), e);
-            }
+        for (ExamAttempt attempt : staleAttempts) {
+            Instant pauseTime = attempt.getLastHeartbeatAt() != null ? attempt.getLastHeartbeatAt() : Instant.now();
+            attempt.setStatus(AttemptStatus.CONNECTION_PAUSED);
+            attempt.setPausedAt(pauseTime);
+            // Advance resume stage: 0 -> 1 (requires Passcode 2), 1 -> 2 (requires Passcode 3), 2+ stays at 2+
+            int currentStage = attempt.getResumeStage();
+            attempt.setResumeStage(currentStage == 0 ? 1 : Math.max(2, currentStage + 1));
+
+            attemptRepository.save(attempt);
+            logEvent(attempt, ExamEventType.CONNECTION_PAUSED, "Attempt paused due to heartbeat timeout (>35s)", null, null);
+            logEvent(attempt, ExamEventType.HEARTBEAT_TIMEOUT, "Heartbeat ceased at " + pauseTime, null, null);
+            log.info("Paused attempt {} for student {} due to heartbeat loss. Resume stage: {}",
+                    attempt.getId(), attempt.getStudent().getId(), attempt.getResumeStage());
         }
+    }
+
+    /**
+     * Background Worker 2: Automatically finalizes any active attempts that reached 0 remaining seconds.
+     */
+    @Scheduled(fixedDelay = 15000)
+    @Transactional
+    public void autoFinalizeZeroRemainingAttempts() {
+        List<ExamAttempt> zeroRemaining = attemptRepository.findByStatusInAndRemainingActiveSecondsLessThanEqual(
+                List.of(AttemptStatus.ACTIVE, AttemptStatus.IN_PROGRESS), 0
+        );
+
+        for (ExamAttempt attempt : zeroRemaining) {
+            finalizeAutoSubmission(attempt, Instant.now());
+        }
+    }
+
+    private void finalizeAutoSubmission(ExamAttempt attempt, Instant now) {
+        attempt.setStatus(AttemptStatus.AUTO_SUBMITTED);
+        attempt.setSubmittedAt(now);
+        attempt.setRemainingActiveSeconds(0);
+        ExamAttempt saved = attemptRepository.save(attempt);
+        logEvent(saved, ExamEventType.AUTO_SUBMITTED, "Attempt auto-submitted upon timer expiration", null, null);
+
+        try {
+            gradingAndResultService.autoGradeAttempt(saved);
+        } catch (Exception e) {
+            log.error("Failed to auto-grade expired attempt: {}", saved.getId(), e);
+        }
+    }
+
+    private ExamExecutionPayloadDto buildExecutionPayload(ExamAttempt attempt, Examination exam, ExamSchedule schedule, Instant now) {
+        List<ExamQuestion> examQuestions = examQuestionRepository.findByExaminationIdOrderByQuestionOrderAsc(exam.getId());
+
+        List<ExamQuestionDeliveryDto> questionDtos = examQuestions.stream()
+                .map(eq -> {
+                    Question q = eq.getQuestion();
+                    List<QuestionOptionDeliveryDto> optionDtos = questionOptionRepository.findByQuestionIdOrderByOptionOrderAsc(q.getId()).stream()
+                            .map(opt -> QuestionOptionDeliveryDto.builder()
+                                    .id(opt.getId())
+                                    .optionOrder(opt.getOptionOrder())
+                                    .optionText(opt.getOptionText())
+                                    .build())
+                            .toList();
+
+                    return ExamQuestionDeliveryDto.builder()
+                            .examQuestionId(eq.getId())
+                            .questionId(q.getId())
+                            .questionOrder(eq.getQuestionOrder())
+                            .marks(eq.getMarks())
+                            .questionText(q.getQuestionText())
+                            .questionType(q.getQuestionType())
+                            .options(optionDtos)
+                            .build();
+                })
+                .toList();
+
+        List<StudentAnswerDto> savedAnswers = answerRepository.findByAttemptId(attempt.getId()).stream()
+                .map(StudentAnswerDto::fromEntity)
+                .toList();
+
+        return ExamExecutionPayloadDto.builder()
+                .attemptId(attempt.getId())
+                .examinationId(exam.getId())
+                .scheduleId(schedule.getId())
+                .courseCode(exam.getCourseOffering() != null && exam.getCourseOffering().getCourse() != null ? exam.getCourseOffering().getCourse().getCode() : "")
+                .courseName(exam.getCourseOffering() != null && exam.getCourseOffering().getCourse() != null ? exam.getCourseOffering().getCourse().getName() : "")
+                .examinationTitle(exam.getTitle())
+                .examinationDescription(exam.getDescription())
+                .instructions(schedule.getInstructions())
+                .durationMinutes(exam.getDurationMinutes())
+                .durationSeconds(attempt.getDurationSeconds())
+                .remainingActiveSeconds(attempt.getRemainingActiveSeconds())
+                .resumeStage(attempt.getResumeStage())
+                .totalMarks(exam.getTotalMarks())
+                .passingMarks(exam.getPassingMarks())
+                .attemptNumber(attempt.getAttemptNumber())
+                .attemptLimit(exam.getAttemptLimit())
+                .status(attempt.getStatus())
+                .startedAt(attempt.getStartedAt())
+                .activeSince(attempt.getActiveSince())
+                .pausedAt(attempt.getPausedAt())
+                .deadlineAt(attempt.getDeadlineAt())
+                .serverCurrentTime(now)
+                .timezone(schedule.getTimezone())
+                .randomizeQuestions(exam.getRandomizeQuestions())
+                .randomizeOptions(exam.getRandomizeOptions())
+                .questions(questionDtos)
+                .savedAnswers(savedAnswers)
+                .build();
+    }
+
+    private ExamSubmissionResultDto buildSubmissionResult(ExamAttempt attempt, String message) {
+        long answeredCount = answerRepository.countByAttemptId(attempt.getId());
+        long totalQuestions = examQuestionRepository.countByExaminationId(attempt.getExamination().getId());
+
+        return ExamSubmissionResultDto.builder()
+                .attemptId(attempt.getId())
+                .examinationId(attempt.getExamination().getId())
+                .examinationTitle(attempt.getExamination().getTitle())
+                .startedAt(attempt.getStartedAt())
+                .submittedAt(attempt.getSubmittedAt())
+                .status(attempt.getStatus())
+                .totalQuestions((int) totalQuestions)
+                .answeredQuestions((int) answeredCount)
+                .message(message)
+                .build();
     }
 
     private void logEvent(ExamAttempt attempt, ExamEventType type, String payload, String ip, String userAgent) {
@@ -408,109 +667,5 @@ public class ExamExecutionService {
                 .occurredAt(Instant.now())
                 .build();
         eventRepository.save(event);
-
-        if (attempt.getSchedule() != null) {
-            try {
-                monitoringService.broadcastMonitoringEvent(attempt.getSchedule().getId(), type, attempt, payload);
-            } catch (Exception e) {
-                log.warn("Failed to broadcast monitoring event to WebSocket: {}", e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * Builds student-safe examination payload.
-     * NEVER sends correct answers, grading explanations, or teacher private notes.
-     */
-    private ExamExecutionPayloadDto buildExecutionPayload(ExamAttempt attempt, Examination exam, ExamSchedule schedule, Instant now) {
-        List<ExamQuestion> examQuestions = examQuestionRepository.findByExaminationIdOrderByQuestionOrderAsc(exam.getId());
-
-        List<ExamQuestionDeliveryDto> questionDtos = new ArrayList<>();
-        for (ExamQuestion eq : examQuestions) {
-            Question q = eq.getQuestion();
-
-            List<QuestionOptionDeliveryDto> optionDtos = new ArrayList<>();
-            if (q.getOptions() != null) {
-                for (QuestionOption opt : q.getOptions()) {
-                    // NEVER map isCorrect or explanation to student delivery DTO!
-                    optionDtos.add(QuestionOptionDeliveryDto.builder()
-                            .id(opt.getId())
-                            .optionOrder(opt.getOptionOrder())
-                            .optionText(opt.getOptionText())
-                            .build());
-                }
-            }
-
-            // Randomize options if configured
-            if (Boolean.TRUE.equals(exam.getRandomizeOptions())) {
-                Collections.shuffle(optionDtos, new Random(attempt.getId() + eq.getId()));
-            }
-
-            questionDtos.add(ExamQuestionDeliveryDto.builder()
-                    .examQuestionId(eq.getId())
-                    .questionId(q.getId())
-                    .questionOrder(eq.getQuestionOrder())
-                    .marks(eq.getMarks())
-                    .questionText(q.getQuestionText())
-                    .questionType(q.getQuestionType())
-                    .options(optionDtos)
-                    .build());
-        }
-
-        // Randomize questions if configured (using deterministic seed per attempt)
-        if (Boolean.TRUE.equals(exam.getRandomizeQuestions())) {
-            Collections.shuffle(questionDtos, new Random(attempt.getId() * 31));
-            // Renumber presentation order
-            for (int i = 0; i < questionDtos.size(); i++) {
-                questionDtos.get(i).setQuestionOrder(i + 1);
-            }
-        }
-
-        // Fetch existing saved answers for restoration
-        List<StudentAnswer> savedAnswers = answerRepository.findByAttemptIdWithSelectedOptions(attempt.getId());
-        List<StudentAnswerDto> savedAnswerDtos = savedAnswers.stream()
-                .map(StudentAnswerDto::fromEntity)
-                .toList();
-
-        return ExamExecutionPayloadDto.builder()
-                .attemptId(attempt.getId())
-                .examinationId(exam.getId())
-                .scheduleId(schedule.getId())
-                .courseCode(exam.getCourseOffering() != null ? exam.getCourseOffering().getCourse().getCode() : null)
-                .courseName(exam.getCourseOffering() != null ? exam.getCourseOffering().getCourse().getName() : null)
-                .examinationTitle(exam.getTitle())
-                .examinationDescription(exam.getDescription())
-                .instructions(exam.getInstructions())
-                .durationMinutes(schedule.getDurationMinutes())
-                .totalMarks(exam.getTotalMarks())
-                .passingMarks(exam.getPassingMarks())
-                .attemptNumber(attempt.getAttemptNumber())
-                .attemptLimit(exam.getAttemptLimit())
-                .status(attempt.getStatus())
-                .startedAt(attempt.getStartedAt())
-                .deadlineAt(attempt.getDeadlineAt())
-                .serverCurrentTime(now)
-                .randomizeQuestions(exam.getRandomizeQuestions())
-                .randomizeOptions(exam.getRandomizeOptions())
-                .questions(questionDtos)
-                .savedAnswers(savedAnswerDtos)
-                .build();
-    }
-
-    private ExamSubmissionResultDto buildSubmissionResult(ExamAttempt attempt, String message) {
-        int totalQuestions = examQuestionRepository.findByExaminationIdOrderByQuestionOrderAsc(attempt.getExamination().getId()).size();
-        int answeredQuestions = answerRepository.findByAttemptId(attempt.getId()).size();
-
-        return ExamSubmissionResultDto.builder()
-                .attemptId(attempt.getId())
-                .examinationId(attempt.getExamination().getId())
-                .examinationTitle(attempt.getExamination().getTitle())
-                .status(attempt.getStatus())
-                .startedAt(attempt.getStartedAt())
-                .submittedAt(attempt.getSubmittedAt())
-                .totalQuestions(totalQuestions)
-                .answeredQuestions(answeredQuestions)
-                .message(message)
-                .build();
     }
 }

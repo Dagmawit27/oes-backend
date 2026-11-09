@@ -10,6 +10,10 @@ import com.oes.onlineexamsystem.common.exception.ResourceNotFoundException;
 import com.oes.onlineexamsystem.examination.entity.ExamStatus;
 import com.oes.onlineexamsystem.examination.entity.Examination;
 import com.oes.onlineexamsystem.examination.repository.ExaminationRepository;
+import com.oes.onlineexamsystem.execution.entity.AttemptStatus;
+import com.oes.onlineexamsystem.execution.entity.ExamAttempt;
+import com.oes.onlineexamsystem.execution.repository.ExamAttemptRepository;
+import com.oes.onlineexamsystem.execution.service.PasscodeSecurityService;
 import com.oes.onlineexamsystem.notification.service.NotificationService;
 import com.oes.onlineexamsystem.schedule.dto.*;
 import com.oes.onlineexamsystem.schedule.entity.*;
@@ -20,14 +24,14 @@ import com.oes.onlineexamsystem.schedule.repository.ExamScheduleRepository;
 import com.oes.onlineexamsystem.user.entity.User;
 import com.oes.onlineexamsystem.user.repository.UserRepository;
 import jakarta.persistence.criteria.Predicate;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
+import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
@@ -44,6 +48,8 @@ public class ExamScheduleService {
     private final StudentRepository studentRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final PasscodeSecurityService passcodeSecurityService;
+    private final ExamAttemptRepository attemptRepository;
 
     private static final List<ScheduleStatus> ACTIVE_STATUSES = List.of(
             ScheduleStatus.SCHEDULED, ScheduleStatus.ONGOING, ScheduleStatus.RESCHEDULED
@@ -57,7 +63,9 @@ public class ExamScheduleService {
                                EnrollmentRepository enrollmentRepository,
                                StudentRepository studentRepository,
                                UserRepository userRepository,
-                               NotificationService notificationService) {
+                               NotificationService notificationService,
+                               PasscodeSecurityService passcodeSecurityService,
+                               ExamAttemptRepository attemptRepository) {
         this.scheduleRepository = scheduleRepository;
         this.eligibilityRepository = eligibilityRepository;
         this.roomRepository = roomRepository;
@@ -67,15 +75,13 @@ public class ExamScheduleService {
         this.studentRepository = studentRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.passcodeSecurityService = passcodeSecurityService;
+        this.attemptRepository = attemptRepository;
     }
 
-    /**
-     * Official Attempt Deadline Rule:
-     * Enforces the earlier of the student's personal duration deadline and the examination window closing time.
-     */
     public static Instant calculateOfficialAttemptDeadline(Instant attemptStart, int durationMinutes, Instant scheduledCloseAt) {
         Instant personalDeadline = attemptStart.plus(durationMinutes, ChronoUnit.MINUTES);
-        return personalDeadline.isBefore(scheduledCloseAt) ? personalDeadline : scheduledCloseAt;
+        return scheduledCloseAt != null && scheduledCloseAt.isBefore(personalDeadline) ? scheduledCloseAt : personalDeadline;
     }
 
     @Transactional(readOnly = true)
@@ -98,7 +104,7 @@ public class ExamScheduleService {
             } else if (from != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("scheduledStartAt"), from));
             } else if (to != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("scheduledCloseAt"), to));
+                predicates.add(cb.lessThanOrEqualTo(root.get("scheduledStartAt"), to));
             }
 
             return cb.and(predicates.toArray(new Predicate[0]));
@@ -145,12 +151,63 @@ public class ExamScheduleService {
             throw new BusinessRuleException("Only approved examinations can be scheduled. Current status: " + examination.getStatus());
         }
 
-        if (!request.getScheduledCloseAt().isAfter(request.getScheduledStartAt())) {
-            throw new BusinessRuleException("Scheduled close time must be strictly after scheduled start time.");
+        // 1. Instructor controls examination duration
+        int durationMinutes = (examination.getDurationMinutes() != null && examination.getDurationMinutes() > 0)
+                ? examination.getDurationMinutes()
+                : (request.getDurationMinutes() != null && request.getDurationMinutes() > 0 ? request.getDurationMinutes() : 60);
+
+        // 2. Exam Officer controls Date, Scheduled Start Time, and College Timezone
+        String tzStr = (request.getTimezone() != null && !request.getTimezone().trim().isEmpty())
+                ? request.getTimezone().trim()
+                : "Africa/Addis_Ababa";
+        ZoneId collegeZone;
+        try {
+            collegeZone = ZoneId.of(tzStr);
+        } catch (Exception e) {
+            collegeZone = ZoneId.of("Africa/Addis_Ababa");
+            tzStr = "Africa/Addis_Ababa";
         }
 
-        if (request.getDurationMinutes() <= 0) {
-            throw new BusinessRuleException("Examination duration must be greater than zero.");
+        LocalDate examDate = request.getExaminationDate();
+        LocalTime startTime = request.getScheduledStartTime();
+
+        // Support fallback from scheduledStartAt if legacy request
+        if (examDate == null || startTime == null) {
+            if (request.getScheduledStartAt() != null) {
+                ZonedDateTime zdt = request.getScheduledStartAt().atZone(collegeZone);
+                examDate = zdt.toLocalDate();
+                startTime = zdt.toLocalTime();
+            } else {
+                examDate = LocalDate.now(collegeZone);
+                startTime = LocalTime.of(9, 0);
+            }
+        }
+
+        ZonedDateTime startZoned = ZonedDateTime.of(examDate, startTime, collegeZone);
+        Instant scheduledStartAt = startZoned.toInstant();
+        // Access boundary is 23:59:59 in the configured college timezone on the examination date
+        ZonedDateTime accessCloseZoned = ZonedDateTime.of(examDate, LocalTime.of(23, 59, 59), collegeZone);
+        Instant startAccessEndsAt = accessCloseZoned.toInstant();
+
+        // 3. Configure and validate 3 Passcodes
+        String hash1 = null;
+        String hash2 = null;
+        String hash3 = null;
+
+        if (request.getPasscode1() != null && request.getPasscode2() != null && request.getPasscode3() != null) {
+            passcodeSecurityService.validatePasscodeConfig(
+                    request.getPasscode1().trim(),
+                    request.getPasscode2().trim(),
+                    request.getPasscode3().trim()
+            );
+            hash1 = passcodeSecurityService.hashPasscode(request.getPasscode1().trim());
+            hash2 = passcodeSecurityService.hashPasscode(request.getPasscode2().trim());
+            hash3 = passcodeSecurityService.hashPasscode(request.getPasscode3().trim());
+        } else {
+            // Default seed passcodes ('1234', '5678', '9012') for fallback convenience
+            hash1 = passcodeSecurityService.hashPasscode("1234");
+            hash2 = passcodeSecurityService.hashPasscode("5678");
+            hash3 = passcodeSecurityService.hashPasscode("9012");
         }
 
         ExamRoom room = null;
@@ -160,24 +217,21 @@ public class ExamScheduleService {
             if (!Boolean.TRUE.equals(room.getIsActive())) {
                 throw new BusinessRuleException("Selected examination room '" + room.getName() + "' is inactive.");
             }
-
-            // Room conflict verification
-            List<ExamSchedule> roomConflicts = scheduleRepository.findConflictingRoomSchedules(
-                    room.getId(), request.getScheduledStartAt(), request.getScheduledCloseAt(), ACTIVE_STATUSES, null
-            );
-            if (!roomConflicts.isEmpty()) {
-                throw new BusinessRuleException("Room '" + room.getName() + "' is already reserved for examination '" +
-                        roomConflicts.get(0).getExamination().getTitle() + "' during the specified time window.");
-            }
         }
 
         ExamSchedule schedule = ExamSchedule.builder()
                 .examination(examination)
-                .scheduledStartAt(request.getScheduledStartAt())
-                .scheduledCloseAt(request.getScheduledCloseAt())
-                .durationMinutes(request.getDurationMinutes())
+                .examinationDate(examDate)
+                .scheduledStartTime(startTime)
+                .scheduledStartAt(scheduledStartAt)
+                .scheduledCloseAt(startAccessEndsAt)
+                .startAccessEndsAt(startAccessEndsAt)
+                .durationMinutes(durationMinutes)
+                .passcodeHash1(hash1)
+                .passcodeHash2(hash2)
+                .passcodeHash3(hash3)
                 .room(room)
-                .timezone(request.getTimezone() != null ? request.getTimezone() : "UTC")
+                .timezone(tzStr)
                 .status(ScheduleStatus.SCHEDULED)
                 .instructions(request.getInstructions() != null ? request.getInstructions().trim() : null)
                 .createdBy(officer)
@@ -205,22 +259,19 @@ public class ExamScheduleService {
                                               Long excludeScheduleId) {
         ScheduleConflictDto.ScheduleConflictDtoBuilder result = ScheduleConflictDto.builder().hasConflict(false);
 
-        // 1. Room conflict check
-        if (roomId != null) {
+        if (roomId != null && start != null && close != null) {
             List<ExamSchedule> roomConflicts = scheduleRepository.findConflictingRoomSchedules(
                     roomId, start, close, ACTIVE_STATUSES, excludeScheduleId
             );
             if (!roomConflicts.isEmpty()) {
                 result.hasConflict(true);
                 ExamSchedule conflict = roomConflicts.get(0);
-                result.roomConflictMessage("Room reserved for: " + conflict.getExamination().getTitle() +
-                        " (" + conflict.getScheduledStartAt() + " to " + conflict.getScheduledCloseAt() + ")");
+                result.roomConflictMessage("Room reserved for: " + conflict.getExamination().getTitle());
             }
         }
 
-        // 2. Student conflict check
         List<ScheduleConflictDto.StudentConflictItem> studentConflicts = new ArrayList<>();
-        if (examinationId != null) {
+        if (examinationId != null && start != null && close != null) {
             Examination exam = examinationRepository.findById(examinationId).orElse(null);
             if (exam != null && exam.getCourseOffering() != null) {
                 List<Enrollment> enrollments = enrollmentRepository.findByCourseOfferingId(exam.getCourseOffering().getId());
@@ -261,45 +312,48 @@ public class ExamScheduleService {
                 .orElseThrow(() -> new ResourceNotFoundException("Exam Schedule", "id", scheduleId));
 
         if (schedule.getStatus() == ScheduleStatus.COMPLETED || schedule.getStatus() == ScheduleStatus.CANCELLED) {
-            throw new BusinessRuleException("Cannot reschedule an examination that is " + schedule.getStatus() + ".");
+            throw new BusinessRuleException("Cannot reschedule an examination that is already " + schedule.getStatus());
         }
 
-        if (!request.getScheduledCloseAt().isAfter(request.getScheduledStartAt())) {
-            throw new BusinessRuleException("Scheduled close time must be strictly after scheduled start time.");
+        ZoneId collegeZone = ZoneId.of(schedule.getTimezone() != null ? schedule.getTimezone() : "Africa/Addis_Ababa");
+        LocalDate examDate = request.getExaminationDate() != null
+                ? request.getExaminationDate()
+                : schedule.getExaminationDate();
+        LocalTime startTime = request.getScheduledStartTime() != null
+                ? request.getScheduledStartTime()
+                : schedule.getScheduledStartTime();
+
+        if (examDate != null && startTime != null) {
+            schedule.setExaminationDate(examDate);
+            schedule.setScheduledStartTime(startTime);
+            Instant startInstant = ZonedDateTime.of(examDate, startTime, collegeZone).toInstant();
+            Instant accessCloseInstant = ZonedDateTime.of(examDate, LocalTime.of(23, 59, 59), collegeZone).toInstant();
+            schedule.setScheduledStartAt(startInstant);
+            schedule.setStartAccessEndsAt(accessCloseInstant);
+            schedule.setScheduledCloseAt(accessCloseInstant);
+        } else if (request.getScheduledStartAt() != null) {
+            schedule.setScheduledStartAt(request.getScheduledStartAt());
         }
 
         if (request.getRoomId() != null) {
             ExamRoom room = roomRepository.findById(request.getRoomId())
                     .orElseThrow(() -> new ResourceNotFoundException("Exam Room", "id", request.getRoomId()));
-            List<ExamSchedule> roomConflicts = scheduleRepository.findConflictingRoomSchedules(
-                    room.getId(), request.getScheduledStartAt(), request.getScheduledCloseAt(), ACTIVE_STATUSES, scheduleId
-            );
-            if (!roomConflicts.isEmpty()) {
-                throw new BusinessRuleException("Room '" + room.getName() + "' is already reserved for examination '" +
-                        roomConflicts.get(0).getExamination().getTitle() + "'.");
-            }
             schedule.setRoom(room);
-        } else if (request.getRoomId() == null && schedule.getRoom() != null) {
-            schedule.setRoom(null);
         }
 
-        schedule.setScheduledStartAt(request.getScheduledStartAt());
-        schedule.setScheduledCloseAt(request.getScheduledCloseAt());
-        if (request.getDurationMinutes() != null && request.getDurationMinutes() > 0) {
-            schedule.setDurationMinutes(request.getDurationMinutes());
-        }
         if (request.getInstructions() != null) {
             schedule.setInstructions(request.getInstructions().trim());
         }
-        schedule.setStatus(ScheduleStatus.RESCHEDULED);
 
+        schedule.setStatus(ScheduleStatus.RESCHEDULED);
         ExamSchedule updated = scheduleRepository.save(schedule);
 
-        // Notify affected students
-        emitScheduleNotifications(updated, NotificationType.EXAM_RESCHEDULED,
-                "Examination Rescheduled: " + schedule.getExamination().getTitle(),
-                "Your examination has been rescheduled to " + request.getScheduledStartAt() +
-                        (request.getReason() != null ? ". Reason: " + request.getReason() : "."));
+        emitScheduleNotifications(
+                updated,
+                NotificationType.EXAM_RESCHEDULED,
+                "Examination Rescheduled: " + updated.getExamination().getTitle(),
+                "Your examination date/time has been rescheduled to " + updated.getExaminationDate() + " at " + updated.getScheduledStartTime() + " (" + updated.getTimezone() + ")."
+        );
 
         return ExamScheduleDto.fromEntity(updated, true);
     }
@@ -309,18 +363,18 @@ public class ExamScheduleService {
         ExamSchedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Exam Schedule", "id", scheduleId));
 
-        if (schedule.getStatus() == ScheduleStatus.CANCELLED) {
-            throw new BusinessRuleException("Schedule is already cancelled.");
-        }
-
         schedule.setStatus(ScheduleStatus.CANCELLED);
         ExamSchedule updated = scheduleRepository.save(schedule);
 
-        // Notify affected students
-        emitScheduleNotifications(updated, NotificationType.EXAM_CANCELLED,
-                "Examination Cancelled: " + schedule.getExamination().getTitle(),
-                "The scheduled examination session has been cancelled." +
-                        (reason != null ? " Reason: " + reason : ""));
+        String msg = "The scheduled examination for " + updated.getExamination().getTitle() + " has been cancelled by the examination office."
+                + (reason != null && !reason.trim().isEmpty() ? " Reason: " + reason.trim() : "");
+
+        emitScheduleNotifications(
+                updated,
+                NotificationType.EXAM_CANCELLED,
+                "Examination Cancelled: " + updated.getExamination().getTitle(),
+                msg
+        );
 
         return ExamScheduleDto.fromEntity(updated, true);
     }
@@ -333,15 +387,15 @@ public class ExamScheduleService {
         Student student = studentRepository.findById(request.getStudentId())
                 .orElseThrow(() -> new ResourceNotFoundException("Student", "id", request.getStudentId()));
 
-        if (eligibilityRepository.existsByScheduleIdAndStudentId(scheduleId, student.getId())) {
-            throw new BusinessRuleException("Student " + student.getRegistrationNumber() + " is already registered for this examination schedule.");
+        if (eligibilityRepository.existsByScheduleIdAndStudentId(scheduleId, request.getStudentId())) {
+            throw new BusinessRuleException("Student is already registered for this examination schedule.");
         }
 
         ExamEligibility eligibility = ExamEligibility.builder()
                 .schedule(schedule)
                 .student(student)
                 .eligibilityStatus(request.getEligibilityStatus() != null ? request.getEligibilityStatus() : EligibilityStatus.ELIGIBLE)
-                .reason(request.getReason() != null ? request.getReason().trim() : "Authorized exception by exam officer")
+                .reason(request.getReason())
                 .build();
 
         ExamEligibility saved = eligibilityRepository.save(eligibility);
@@ -351,7 +405,7 @@ public class ExamScheduleService {
     @Transactional
     public ExamEligibilityDto updateEligibility(Long scheduleId, Long studentId, UpdateEligibilityRequest request, Long officerId) {
         ExamEligibility eligibility = eligibilityRepository.findByScheduleIdAndStudentId(scheduleId, studentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Exam Eligibility", "studentId", studentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Exam Eligibility", "scheduleId and studentId", scheduleId + ", " + studentId));
 
         eligibility.setEligibilityStatus(request.getEligibilityStatus());
         if (request.getReason() != null) {
@@ -364,37 +418,79 @@ public class ExamScheduleService {
 
     @Transactional
     public void removeStudentEligibility(Long scheduleId, Long studentId, Long officerId) {
-        if (!eligibilityRepository.existsByScheduleIdAndStudentId(scheduleId, studentId)) {
-            throw new ResourceNotFoundException("Exam Eligibility", "studentId", studentId);
-        }
-        eligibilityRepository.deleteByScheduleIdAndStudentId(scheduleId, studentId);
+        ExamEligibility eligibility = eligibilityRepository.findByScheduleIdAndStudentId(scheduleId, studentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam Eligibility", "scheduleId and studentId", scheduleId + ", " + studentId));
+        eligibilityRepository.delete(eligibility);
     }
 
+    /**
+     * Authoritative Student Examination Visibility Engine:
+     * Evaluates schedule date, start time, access window, individual attempt states, and resume requirements.
+     */
     @Transactional(readOnly = true)
     public List<StudentScheduleDto> getStudentSchedules(Long userId) {
-        Instant now = Instant.now();
+        Student student = studentRepository.findByUserId(userId)
+                .orElseThrow(() -> new BusinessRuleException("Authenticated user is not registered as a student."));
+
         List<ExamEligibility> eligibilities = eligibilityRepository.findByStudentUserIdWithSchedule(userId);
+        Instant now = Instant.now();
 
         return eligibilities.stream()
                 .map(ee -> {
                     ExamSchedule s = ee.getSchedule();
                     Examination ex = s.getExamination();
 
-                    boolean isAvailable = now.isAfter(s.getScheduledStartAt())
-                            && now.isBefore(s.getScheduledCloseAt())
+                    ZoneId collegeZone = ZoneId.of(s.getTimezone() != null ? s.getTimezone() : "Africa/Addis_Ababa");
+                    LocalDate collegeToday = LocalDate.now(collegeZone);
+
+                    LocalDate examDate = s.getExaminationDate() != null
+                            ? s.getExaminationDate()
+                            : s.getScheduledStartAt().atZone(collegeZone).toLocalDate();
+
+                    Instant startAccessEndsAt = s.getStartAccessEndsAt() != null
+                            ? s.getStartAccessEndsAt()
+                            : ZonedDateTime.of(examDate, LocalTime.of(23, 59, 59), collegeZone).toInstant();
+
+                    // Check existing attempts for this student & schedule
+                    List<ExamAttempt> attempts = attemptRepository.findByStudentIdAndScheduleId(student.getId(), s.getId());
+                    ExamAttempt latestAttempt = attempts.isEmpty() ? null : attempts.get(attempts.size() - 1);
+
+                    AttemptStatus attemptStatus = latestAttempt != null ? latestAttempt.getStatus() : AttemptStatus.NOT_STARTED;
+                    Long attemptId = latestAttempt != null ? latestAttempt.getId() : null;
+                    Integer resumeStage = latestAttempt != null ? latestAttempt.getResumeStage() : 0;
+                    Integer remainingSecs = latestAttempt != null ? latestAttempt.getRemainingActiveSeconds() : (ex.getDurationMinutes() * 60);
+
+                    boolean isExamDate = collegeToday.equals(examDate);
+                    boolean isBeforeStart = isExamDate && now.isBefore(s.getScheduledStartAt());
+                    boolean isWindowOpen = isExamDate && !now.isBefore(s.getScheduledStartAt()) && !now.isAfter(startAccessEndsAt);
+                    boolean isWindowClosed = collegeToday.isAfter(examDate) || now.isAfter(startAccessEndsAt);
+
+                    boolean isResumable = latestAttempt != null
+                            && (attemptStatus == AttemptStatus.CONNECTION_PAUSED || attemptStatus == AttemptStatus.RESUME_REQUIRED || attemptStatus == AttemptStatus.ACTIVE || attemptStatus == AttemptStatus.IN_PROGRESS)
+                            && remainingSecs != null && remainingSecs > 0;
+
+                    boolean isStartable = latestAttempt == null
+                            && isWindowOpen
                             && (s.getStatus() == ScheduleStatus.SCHEDULED || s.getStatus() == ScheduleStatus.RESCHEDULED)
                             && ee.getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
 
-                    Instant effectiveDeadline = calculateOfficialAttemptDeadline(now, s.getDurationMinutes(), s.getScheduledCloseAt());
+                    // Available on scheduled examination date
+                    boolean isAvailable = (isExamDate || isResumable)
+                            && (s.getStatus() == ScheduleStatus.SCHEDULED || s.getStatus() == ScheduleStatus.RESCHEDULED)
+                            && ee.getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
 
                     StudentScheduleDto.StudentScheduleDtoBuilder b = StudentScheduleDto.builder()
                             .scheduleId(s.getId())
                             .examinationId(ex.getId())
                             .examinationTitle(ex.getTitle())
                             .examinationDescription(ex.getDescription())
+                            .examinationDate(examDate)
+                            .scheduledStartTime(s.getScheduledStartTime())
                             .scheduledStartAt(s.getScheduledStartAt())
                             .scheduledCloseAt(s.getScheduledCloseAt())
-                            .durationMinutes(s.getDurationMinutes())
+                            .startAccessEndsAt(startAccessEndsAt)
+                            .timezone(s.getTimezone())
+                            .durationMinutes(ex.getDurationMinutes())
                             .totalMarks(ex.getTotalMarks())
                             .passingMarks(ex.getPassingMarks())
                             .status(s.getStatus())
@@ -402,7 +498,14 @@ public class ExamScheduleService {
                             .eligibilityReason(ee.getReason())
                             .instructions(s.getInstructions())
                             .isAvailableNow(isAvailable)
-                            .effectiveDeadline(effectiveDeadline);
+                            .isStartableNow(isStartable)
+                            .isResumableNow(isResumable)
+                            .isBeforeScheduledStart(isBeforeStart && latestAttempt == null)
+                            .isStartWindowClosed(isWindowClosed && latestAttempt == null)
+                            .attemptStatus(attemptStatus)
+                            .attemptId(attemptId)
+                            .resumeStage(resumeStage)
+                            .remainingActiveSeconds(remainingSecs);
 
                     if (s.getRoom() != null) {
                         b.roomName(s.getRoom().getName()).building(s.getRoom().getBuilding());
@@ -448,7 +551,6 @@ public class ExamScheduleService {
                 schedule.getEligibilities().add(eligibility);
                 eligibilityRepository.save(eligibility);
 
-                // Create notification event and dispatch real-time STOMP message
                 if (student.getUser() != null) {
                     try {
                         notificationService.sendNotificationToUser(
@@ -456,7 +558,7 @@ public class ExamScheduleService {
                                 NotificationType.EXAM_SCHEDULED,
                                 "Examination Scheduled: " + examination.getTitle(),
                                 "Your examination for " + examination.getCourseOffering().getCourse().getCode() +
-                                        " has been scheduled for " + schedule.getScheduledStartAt() + ". Please check your exam schedule.",
+                                        " has been scheduled for " + schedule.getExaminationDate() + " at " + schedule.getScheduledStartTime() + " (" + schedule.getTimezone() + ").",
                                 schedule
                         );
                     } catch (Exception e) {

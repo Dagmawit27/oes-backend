@@ -46,7 +46,7 @@ public class ExamAttempt {
     @Column(name = "started_at", nullable = false)
     private Instant startedAt;
 
-    @Column(name = "deadline_at", nullable = false)
+    @Column(name = "deadline_at")
     private Instant deadlineAt;
 
     @Column(name = "submitted_at")
@@ -55,6 +55,32 @@ public class ExamAttempt {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 30, nullable = false)
     private AttemptStatus status;
+
+    @Column(name = "duration_seconds", nullable = false)
+    private Integer durationSeconds;
+
+    @Column(name = "remaining_active_seconds", nullable = false)
+    private Integer remainingActiveSeconds;
+
+    @Builder.Default
+    @Column(name = "accumulated_active_seconds", nullable = false)
+    private Integer accumulatedActiveSeconds = 0;
+
+    @Column(name = "active_since")
+    private Instant activeSince;
+
+    @Column(name = "paused_at")
+    private Instant pausedAt;
+
+    @Column(name = "last_heartbeat_at")
+    private Instant lastHeartbeatAt;
+
+    @Column(name = "last_resumed_at")
+    private Instant lastResumedAt;
+
+    @Builder.Default
+    @Column(name = "resume_stage", nullable = false)
+    private Integer resumeStage = 0;
 
     @Column(name = "last_activity_at", nullable = false)
     private Instant lastActivityAt;

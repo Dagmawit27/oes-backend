@@ -569,21 +569,65 @@ public class GradingAndResultService {
                     ExamResult r = resultOpt.get();
                     List<StudentGradeDetailDto> details = new ArrayList<>();
 
-                    // Load question details for student view (safe projection without answer keys)
+                    // Prefetch student answers for the latest attempt (if available)
+                    Map<Long, StudentAnswer> studentAnswerMap = new HashMap<>();
+                    if (latestAttempt != null) {
+                        try {
+                            List<StudentAnswer> answers = answerRepository.findByAttemptIdWithSelectedOptions(latestAttempt.getId());
+                            for (StudentAnswer sa : answers) {
+                                if (sa.getExamQuestion() != null) {
+                                    studentAnswerMap.put(sa.getExamQuestion().getId(), sa);
+                                }
+                            }
+                        } catch (Exception ex) {
+                            log.warn("Failed to prefetch student answers for attempt {}: {}", latestAttempt.getId(), ex.getMessage());
+                        }
+                    }
+
+                    // Load question details for student view with options & selections
                     List<GradeDetail> gds = gradeDetailRepository.findByExamResultId(r.getId());
                     for (GradeDetail gd : gds) {
-                        String qType = null;
-                        if (gd.getExamQuestion() != null && gd.getExamQuestion().getQuestion() != null && gd.getExamQuestion().getQuestion().getQuestionType() != null) {
-                            qType = gd.getExamQuestion().getQuestion().getQuestionType().name();
+                        ExamQuestion eq = gd.getExamQuestion();
+                        Question q = eq != null ? eq.getQuestion() : null;
+                        StudentAnswer sa = gd.getStudentAnswer();
+                        if (sa == null && eq != null) {
+                            sa = studentAnswerMap.get(eq.getId());
                         }
+
+                        List<QuestionGradingOptionDto> optionDtos = new ArrayList<>();
+                        List<Long> selectedIds = new ArrayList<>();
+                        if (sa != null && sa.getSelectedOptions() != null) {
+                            selectedIds = sa.getSelectedOptions().stream()
+                                    .map(o -> o.getQuestionOption().getId())
+                                    .toList();
+                        }
+
+                        if (q != null && q.getOptions() != null) {
+                            for (QuestionOption opt : q.getOptions()) {
+                                optionDtos.add(QuestionGradingOptionDto.builder()
+                                        .id(opt.getId())
+                                        .optionOrder(opt.getOptionOrder())
+                                        .optionText(opt.getOptionText())
+                                        .isCorrect(opt.getIsCorrect())
+                                        .isSelectedByStudent(selectedIds.contains(opt.getId()))
+                                        .build());
+                            }
+                        }
+
+                        String studentAnswerText = sa != null ? sa.getAnswerText() : null;
+                        String qType = q != null && q.getQuestionType() != null ? q.getQuestionType().name() : null;
+
                         details.add(StudentGradeDetailDto.builder()
-                                .questionOrder(gd.getExamQuestion() != null ? gd.getExamQuestion().getQuestionOrder() : null)
-                                .questionText(gd.getExamQuestion() != null && gd.getExamQuestion().getQuestion() != null ? gd.getExamQuestion().getQuestion().getQuestionText() : "")
+                                .questionOrder(eq != null ? eq.getQuestionOrder() : null)
+                                .examQuestionId(eq != null ? eq.getId() : null)
+                                .questionText(q != null ? q.getQuestionText() : "")
                                 .questionType(qType)
                                 .isAutoGraded(gd.getIsAutoGraded())
                                 .awardedMarks(gd.getAwardedMarks())
                                 .maximumMarks(gd.getMaximumMarks())
                                 .feedback(gd.getFeedback())
+                                .studentAnswerText(studentAnswerText)
+                                .options(optionDtos)
                                 .build());
                     }
 
@@ -808,7 +852,7 @@ public class GradingAndResultService {
                 .collect(Collectors.toSet());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public InstructorDashboardStatsDto getInstructorDashboardStats(Long userId) {
         Instructor instructor = instructorRepository.findByUserId(userId).orElse(null);
         if (instructor == null) {
@@ -841,7 +885,7 @@ public class GradingAndResultService {
         for (Examination exam : exams) {
             List<ExamAttempt> attempts = attemptRepository.findByExaminationId(exam.getId());
             for (ExamAttempt att : attempts) {
-                if (att.getStatus() == AttemptStatus.SUBMITTED) {
+                if (att.getStatus() == AttemptStatus.SUBMITTED || att.getStatus() == AttemptStatus.AUTO_SUBMITTED) {
                     Optional<ExamResult> resOpt = resultRepository.findByAttemptId(att.getId());
                     if (resOpt.isPresent()) {
                         ExamResult res = resOpt.get();
@@ -864,7 +908,7 @@ public class GradingAndResultService {
                     return tB.compareTo(tA);
                 })
                 .limit(5)
-                .map(ExaminationDto::fromEntity)
+                .map(e -> ExaminationDto.fromEntity(e, false))
                 .toList();
 
         return InstructorDashboardStatsDto.builder()

@@ -1,9 +1,11 @@
 package com.oes.onlineexamsystem.schedule.dto;
 
-import jakarta.validation.constraints.NotNull;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.*;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
 @Getter
 @Setter
@@ -12,17 +14,16 @@ import java.time.Instant;
 @Builder
 public class RescheduleRequest {
 
-    @NotNull(message = "New scheduled start time is required")
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate examinationDate;
+
+    @JsonFormat(pattern = "HH:mm[:ss]")
+    private LocalTime scheduledStartTime;
+
     private Instant scheduledStartAt;
-
-    @NotNull(message = "New scheduled close time is required")
     private Instant scheduledCloseAt;
-
     private Integer durationMinutes;
-
     private Long roomId;
-
     private String instructions;
-
     private String reason;
 }

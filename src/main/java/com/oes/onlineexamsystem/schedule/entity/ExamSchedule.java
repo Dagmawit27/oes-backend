@@ -8,6 +8,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,14 +30,32 @@ public class ExamSchedule {
     @JoinColumn(name = "examination_id", nullable = false)
     private Examination examination;
 
+    @Column(name = "examination_date", nullable = false)
+    private LocalDate examinationDate;
+
+    @Column(name = "scheduled_start_time", nullable = false)
+    private LocalTime scheduledStartTime;
+
     @Column(name = "scheduled_start_at", nullable = false)
     private Instant scheduledStartAt;
 
-    @Column(name = "scheduled_close_at", nullable = false)
+    @Column(name = "scheduled_close_at")
     private Instant scheduledCloseAt;
+
+    @Column(name = "start_access_ends_at")
+    private Instant startAccessEndsAt;
 
     @Column(name = "duration_minutes", nullable = false)
     private Integer durationMinutes;
+
+    @Column(name = "passcode_hash_1", length = 255)
+    private String passcodeHash1;
+
+    @Column(name = "passcode_hash_2", length = 255)
+    private String passcodeHash2;
+
+    @Column(name = "passcode_hash_3", length = 255)
+    private String passcodeHash3;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "room_id")
@@ -43,7 +63,7 @@ public class ExamSchedule {
 
     @Builder.Default
     @Column(name = "timezone", length = 50, nullable = false)
-    private String timezone = "UTC";
+    private String timezone = "Africa/Addis_Ababa";
 
     @Builder.Default
     @Enumerated(EnumType.STRING)

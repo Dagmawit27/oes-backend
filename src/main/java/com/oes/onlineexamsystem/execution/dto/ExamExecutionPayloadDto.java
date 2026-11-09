@@ -24,6 +24,9 @@ public class ExamExecutionPayloadDto {
     private String instructions;
 
     private Integer durationMinutes;
+    private Integer durationSeconds;
+    private Integer remainingActiveSeconds;
+    private Integer resumeStage;
     private BigDecimal totalMarks;
     private BigDecimal passingMarks;
 
@@ -32,8 +35,11 @@ public class ExamExecutionPayloadDto {
     private AttemptStatus status;
 
     private Instant startedAt;
+    private Instant activeSince;
+    private Instant pausedAt;
     private Instant deadlineAt;
     private Instant serverCurrentTime;
+    private String timezone;
 
     private Boolean randomizeQuestions;
     private Boolean randomizeOptions;

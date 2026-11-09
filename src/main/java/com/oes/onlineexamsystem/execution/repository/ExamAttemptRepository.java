@@ -17,11 +17,17 @@ public interface ExamAttemptRepository extends JpaRepository<ExamAttempt, Long> 
 
     Optional<ExamAttempt> findByStudentIdAndScheduleIdAndStatus(Long studentId, Long scheduleId, AttemptStatus status);
 
+    Optional<ExamAttempt> findByStudentIdAndScheduleIdAndStatusIn(Long studentId, Long scheduleId, Collection<AttemptStatus> statuses);
+
     List<ExamAttempt> findByStudentIdAndScheduleId(Long studentId, Long scheduleId);
 
     long countByStudentIdAndExaminationIdAndStatusIn(Long studentId, Long examinationId, Collection<AttemptStatus> statuses);
 
     List<ExamAttempt> findByStatusAndDeadlineAtBefore(AttemptStatus status, Instant now);
+
+    List<ExamAttempt> findByStatusInAndLastHeartbeatAtBefore(Collection<AttemptStatus> statuses, Instant cutoff);
+
+    List<ExamAttempt> findByStatusInAndRemainingActiveSecondsLessThanEqual(Collection<AttemptStatus> statuses, int remaining);
 
     List<ExamAttempt> findByStudentIdOrderByStartedAtDesc(Long studentId);
 
@@ -30,6 +36,8 @@ public interface ExamAttemptRepository extends JpaRepository<ExamAttempt, Long> 
     List<ExamAttempt> findByScheduleId(Long scheduleId);
 
     long countByScheduleIdAndStatus(Long scheduleId, AttemptStatus status);
+
+    long countByScheduleIdAndStatusIn(Long scheduleId, Collection<AttemptStatus> statuses);
 
     List<ExamAttempt> findByExaminationId(Long examinationId);
 

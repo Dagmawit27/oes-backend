@@ -11,6 +11,7 @@ import com.oes.onlineexamsystem.user.entity.RoleName;
 import com.oes.onlineexamsystem.user.entity.User;
 import com.oes.onlineexamsystem.user.repository.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -45,7 +46,7 @@ public class InstructorService {
         return InstructorDto.fromEntity(instructor);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void syncInstructorsFromUsers() {
         List<User> instructorUsers = userRepository.findAll().stream()
                 .filter(u -> u.getRoles() != null && u.getRoles().stream()

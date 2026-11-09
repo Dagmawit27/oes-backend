@@ -8,6 +8,8 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 
 @Getter
@@ -39,9 +41,12 @@ public class ExamScheduleDto {
     private String instructorName;
     private String instructorEmail;
 
-    // Schedule Timing & Location
+    // Redesigned Schedule Timing & Location
+    private LocalDate examinationDate;
+    private LocalTime scheduledStartTime;
     private Instant scheduledStartAt;
     private Instant scheduledCloseAt;
+    private Instant startAccessEndsAt;
     private Integer durationMinutes;
 
     private Long roomId;
@@ -70,8 +75,11 @@ public class ExamScheduleDto {
 
         ExamScheduleDtoBuilder builder = ExamScheduleDto.builder()
                 .id(s.getId())
+                .examinationDate(s.getExaminationDate())
+                .scheduledStartTime(s.getScheduledStartTime())
                 .scheduledStartAt(s.getScheduledStartAt())
                 .scheduledCloseAt(s.getScheduledCloseAt())
+                .startAccessEndsAt(s.getStartAccessEndsAt())
                 .durationMinutes(s.getDurationMinutes())
                 .timezone(s.getTimezone())
                 .status(s.getStatus())
@@ -130,8 +138,6 @@ public class ExamScheduleDto {
                         .map(ExamEligibilityDto::fromEntity)
                         .toList());
             }
-        } else {
-            builder.eligibleStudentCount(0);
         }
 
         return builder.build();
