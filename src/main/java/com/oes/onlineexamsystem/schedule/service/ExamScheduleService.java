@@ -465,17 +465,23 @@ public class ExamScheduleService {
                     boolean isWindowOpen = isExamDate && !now.isBefore(s.getScheduledStartAt()) && !now.isAfter(startAccessEndsAt);
                     boolean isWindowClosed = collegeToday.isAfter(examDate) || now.isAfter(startAccessEndsAt);
 
-                    boolean isResumable = latestAttempt != null
+                    boolean isSubmitted = latestAttempt != null
+                            && (attemptStatus == AttemptStatus.SUBMITTED || attemptStatus == AttemptStatus.AUTO_SUBMITTED || attemptStatus == AttemptStatus.EXPIRED);
+
+                    boolean isResumable = !isSubmitted
+                            && latestAttempt != null
                             && (attemptStatus == AttemptStatus.CONNECTION_PAUSED || attemptStatus == AttemptStatus.RESUME_REQUIRED || attemptStatus == AttemptStatus.ACTIVE || attemptStatus == AttemptStatus.IN_PROGRESS)
                             && remainingSecs != null && remainingSecs > 0;
 
-                    boolean isStartable = latestAttempt == null
+                    boolean isStartable = !isSubmitted
+                            && latestAttempt == null
                             && isWindowOpen
                             && (s.getStatus() == ScheduleStatus.SCHEDULED || s.getStatus() == ScheduleStatus.RESCHEDULED)
                             && ee.getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
 
-                    // Available on scheduled examination date
-                    boolean isAvailable = (isExamDate || isResumable)
+                    // Available on scheduled examination date strictly if not submitted and active/startable
+                    boolean isAvailable = !isSubmitted
+                            && (isResumable || isStartable)
                             && (s.getStatus() == ScheduleStatus.SCHEDULED || s.getStatus() == ScheduleStatus.RESCHEDULED)
                             && ee.getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
 
