@@ -410,7 +410,7 @@ public class ExamScheduleService {
                         .student(student)
                         .courseOffering(co)
                         .status(EnrollmentStatus.ACTIVE)
-                        .enrolledAt(Instant.now())
+                        .enrolledDate(LocalDate.now())
                         .build();
                 enrollmentRepository.save(enrollment);
             }
