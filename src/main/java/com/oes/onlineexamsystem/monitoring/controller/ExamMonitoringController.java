@@ -47,6 +47,7 @@ public class ExamMonitoringController {
     public ResponseEntity<ApiResponse<ExamNotificationDto>> sendLiveExamAnnouncement(
             @PathVariable Long scheduleId,
             @Valid @RequestBody AnnouncementRequest request) {
+        monitoringService.verifyLiveAnnouncementAllowed(scheduleId);
         request.setScheduleId(scheduleId);
         ExamNotificationDto announcement = notificationService.broadcastAnnouncement(request);
         return ResponseEntity.ok(ApiResponse.success("Live exam announcement sent successfully", announcement));

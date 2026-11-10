@@ -26,6 +26,10 @@ public interface ExamNotificationRepository extends JpaRepository<ExamNotificati
 
     List<ExamNotification> findByScheduleId(Long scheduleId);
 
+    List<ExamNotification> findByScheduleIdOrderByCreatedAtDesc(Long scheduleId);
+
+    List<ExamNotification> findBySchedule_ExaminationId(Long examinationId);
+
     @Modifying
     @Query("UPDATE ExamNotification n SET n.isRead = true WHERE n.user.id = :userId AND n.isRead = false")
     int markAllAsReadForUser(@Param("userId") Long userId);
