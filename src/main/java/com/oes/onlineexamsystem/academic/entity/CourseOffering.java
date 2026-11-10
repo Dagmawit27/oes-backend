@@ -33,6 +33,13 @@ public class CourseOffering {
     @JoinColumn(name = "instructor_id", nullable = false)
     private Instructor instructor;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "program_id")
+    private Program program;
+
+    @Column(name = "student_year_level")
+    private Integer studentYearLevel;
+
     @Builder.Default
     @Column(name = "section", length = 20, nullable = false)
     private String section = "A";

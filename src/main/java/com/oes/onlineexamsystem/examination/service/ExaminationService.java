@@ -127,7 +127,7 @@ public class ExaminationService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
         CourseOffering offering = courseOfferingRepository.findById(request.getCourseOfferingId())
-                .orElseThrow(() -> new ResourceNotFoundException("Course Offering", "id", request.getCourseOfferingId()));
+                .orElseThrow(() -> new ResourceNotFoundException("Course Assignment", "id", request.getCourseOfferingId()));
 
         boolean isAdmin = creator.getRoles().stream()
                 .anyMatch(r -> r.getName().name().equals("ROLE_ADMIN"));
@@ -136,12 +136,12 @@ public class ExaminationService {
             // Verify assigned instructor ownership
             if (offering.getInstructor() == null || offering.getInstructor().getUser() == null ||
                     !offering.getInstructor().getUser().getId().equals(userId)) {
-                throw new UnauthorizedException("You are only permitted to create examinations for course offerings assigned to you.");
+                throw new UnauthorizedException("You are only permitted to create examinations for course assignments assigned to you.");
             }
         }
 
         if (examinationRepository.existsByCourseOfferingIdAndTitleIgnoreCase(offering.getId(), request.getTitle().trim())) {
-            throw new BusinessRuleException("An examination with title '" + request.getTitle().trim() + "' already exists for this course offering.");
+            throw new BusinessRuleException("An examination with title '" + request.getTitle().trim() + "' already exists for this course assignment.");
         }
 
         validateQuestionMarks(request.getQuestions(), request.getTotalMarks(), request.getPassingMarks());
@@ -186,7 +186,7 @@ public class ExaminationService {
 
         if (examinationRepository.existsByCourseOfferingIdAndTitleIgnoreCaseAndIdNot(
                 exam.getCourseOffering().getId(), request.getTitle().trim(), id)) {
-            throw new BusinessRuleException("An examination with title '" + request.getTitle().trim() + "' already exists for this course offering.");
+            throw new BusinessRuleException("An examination with title '" + request.getTitle().trim() + "' already exists for this course assignment.");
         }
 
         validateQuestionMarks(request.getQuestions(), request.getTotalMarks(), request.getPassingMarks());

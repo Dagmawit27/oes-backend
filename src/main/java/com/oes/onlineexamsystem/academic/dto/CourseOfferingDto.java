@@ -26,6 +26,15 @@ public class CourseOfferingDto {
 
     private String semesterName;
 
+    private Long academicYearId;
+    private String academicYearName;
+
+    private Long programId;
+    private String programName;
+    private String programCode;
+
+    private Integer studentYearLevel;
+
     @NotNull(message = "Instructor ID is required")
     private Long instructorId;
 
@@ -40,13 +49,23 @@ public class CourseOfferingDto {
     private Boolean isActive;
 
     public static CourseOfferingDto fromEntity(CourseOffering co) {
+        var semester = co.getSemester();
+        var academicYear = semester != null ? semester.getAcademicYear() : null;
+        var program = co.getProgram();
+
         return CourseOfferingDto.builder()
                 .id(co.getId())
                 .courseId(co.getCourse().getId())
                 .courseName(co.getCourse().getName())
                 .courseCode(co.getCourse().getCode())
-                .semesterId(co.getSemester().getId())
-                .semesterName(co.getSemester().getName())
+                .semesterId(semester != null ? semester.getId() : null)
+                .semesterName(semester != null ? semester.getName() : null)
+                .academicYearId(academicYear != null ? academicYear.getId() : null)
+                .academicYearName(academicYear != null ? academicYear.getName() : null)
+                .programId(program != null ? program.getId() : null)
+                .programName(program != null ? program.getName() : null)
+                .programCode(program != null ? program.getCode() : null)
+                .studentYearLevel(co.getStudentYearLevel())
                 .instructorId(co.getInstructor().getId())
                 .instructorName(co.getInstructor().getUser().getFullName())
                 .instructorEmployeeId(co.getInstructor().getEmployeeId())

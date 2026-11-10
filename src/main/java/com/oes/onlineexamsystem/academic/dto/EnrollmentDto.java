@@ -24,7 +24,7 @@ public class EnrollmentDto {
     private String studentRegistrationNumber;
     private String studentEmail;
 
-    @NotNull(message = "Course offering ID is required")
+    @NotNull(message = "Course assignment ID is required")
     private Long courseOfferingId;
 
     private String courseName;

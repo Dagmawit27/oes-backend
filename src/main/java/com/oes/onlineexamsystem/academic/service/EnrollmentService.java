@@ -121,22 +121,22 @@ public class EnrollmentService {
                     throw new ResourceNotFoundException("Student", "id", dto.getStudentId());
                 });
 
-        // Enforce Business Rule: prevent duplicate student-course offering assignments
+        // Enforce Business Rule: prevent duplicate student-course assignment enrollments
         if (enrollmentRepository.existsByStudentIdAndCourseOfferingId(student.getId(), dto.getCourseOfferingId())) {
-            throw new DuplicateResourceException("Enrollment", "student and course offering",
-                    "Student " + student.getRegistrationNumber() + " is already enrolled in Offering ID " + dto.getCourseOfferingId());
+            throw new DuplicateResourceException("Enrollment", "student and course assignment",
+                    "Student " + student.getRegistrationNumber() + " is already enrolled in Course Assignment ID " + dto.getCourseOfferingId());
         }
 
         CourseOffering offering = courseOfferingRepository.findById(dto.getCourseOfferingId())
-                .orElseThrow(() -> new ResourceNotFoundException("CourseOffering", "id", dto.getCourseOfferingId()));
+                .orElseThrow(() -> new ResourceNotFoundException("Course Assignment", "id", dto.getCourseOfferingId()));
 
         if (!Boolean.TRUE.equals(offering.getIsActive())) {
-            throw new BusinessRuleException("Cannot enroll in an inactive course offering");
+            throw new BusinessRuleException("Cannot enroll in an inactive course assignment");
         }
 
         long activeCount = enrollmentRepository.countByCourseOfferingIdAndStatus(offering.getId(), EnrollmentStatus.ACTIVE);
         if (activeCount >= offering.getMaxStudents()) {
-            throw new BusinessRuleException("Course offering capacity has been reached (Max: " + offering.getMaxStudents() + ")");
+            throw new BusinessRuleException("Course assignment capacity has been reached (Max: " + offering.getMaxStudents() + ")");
         }
 
         Enrollment enrollment = Enrollment.builder()

@@ -34,13 +34,13 @@ public class CourseOfferingController {
         List<CourseOfferingDto> offerings = semesterId != null
                 ? courseOfferingService.getOfferingsBySemester(semesterId)
                 : courseOfferingService.getAllOfferings();
-        return ResponseEntity.ok(ApiResponse.success("Course offerings retrieved successfully", offerings));
+        return ResponseEntity.ok(ApiResponse.success("Course assignments retrieved successfully", offerings));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<CourseOfferingDto>> getOfferingById(@PathVariable Long id) {
         CourseOfferingDto offering = courseOfferingService.getOfferingById(id);
-        return ResponseEntity.ok(ApiResponse.success("Course offering retrieved successfully", offering));
+        return ResponseEntity.ok(ApiResponse.success("Course assignment retrieved successfully", offering));
     }
 
     @GetMapping("/{id}/students")
@@ -62,7 +62,7 @@ public class CourseOfferingController {
     public ResponseEntity<ApiResponse<List<CourseOfferingDto>>> getMyAssignedOfferings(
             @AuthenticationPrincipal UserPrincipal principal) {
         List<CourseOfferingDto> offerings = courseOfferingService.getOfferingsByInstructorUserId(principal.getId());
-        return ResponseEntity.ok(ApiResponse.success("Assigned offerings retrieved successfully", offerings));
+        return ResponseEntity.ok(ApiResponse.success("Assigned course assignments retrieved successfully", offerings));
     }
 
     @PostMapping
@@ -71,13 +71,31 @@ public class CourseOfferingController {
             @Valid @RequestBody CourseOfferingDto dto) {
         CourseOfferingDto created = courseOfferingService.createOffering(dto);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("Course offering created successfully", created));
+                .body(ApiResponse.success("Course assignment created successfully", created));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<CourseOfferingDto>> updateOffering(
+            @PathVariable Long id,
+            @Valid @RequestBody CourseOfferingDto dto) {
+        CourseOfferingDto updated = courseOfferingService.updateOffering(id, dto);
+        return ResponseEntity.ok(ApiResponse.success("Course assignment updated successfully", updated));
+    }
+
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<CourseOfferingDto>> toggleOfferingStatus(
+            @PathVariable Long id,
+            @RequestParam(required = false) Boolean isActive) {
+        CourseOfferingDto updated = courseOfferingService.toggleOfferingStatus(id, isActive);
+        return ResponseEntity.ok(ApiResponse.success("Course assignment status updated successfully", updated));
     }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deactivateOffering(@PathVariable Long id) {
         courseOfferingService.deactivateOffering(id);
-        return ResponseEntity.ok(ApiResponse.success("Course offering deactivated successfully", null));
+        return ResponseEntity.ok(ApiResponse.success("Course assignment deactivated successfully", null));
     }
 }

@@ -25,7 +25,7 @@ public class CreateExaminationRequest {
 
     private String instructions;
 
-    @NotNull(message = "Course offering ID is required")
+    @NotNull(message = "Course assignment ID is required")
     private Long courseOfferingId;
 
     @NotNull(message = "Duration in minutes is required")
